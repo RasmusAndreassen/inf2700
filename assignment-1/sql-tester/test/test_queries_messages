@@ -1,0 +1,37 @@
+testdb: messages.sqlite3
+query_file: queries_messages.sql
+
+query: all_countries
+----
+|Sweden|
+|Norway|
+|USA|
+----
+
+query: messages_to_people_other_than_the_author
+----
+|2018-02-28|Are you ready?|
+|2018-03-01|Good luck!|
+|2018-03-01|thanks! to you, too.|
+|2018-03-01|Thank you! I need it.|
+|2018-03-01|You win!|
+----
+
+query: empty_result
+----
+----
+
+query: wrong_result
+----
+|correct result|
+----
+
+query: erroneous_query
+----
+|correct result|
+----
+
+query: non_existent
+----
+|anyway|
+----
