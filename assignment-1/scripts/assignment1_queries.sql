@@ -6,6 +6,10 @@
 .mode column
 .header on
 
-SELECT DISTINCT productName, productVendor
-FROM   Products
-LIMIT  6;
+
+SELECT C.customerName AS Customer, SUM(OD.quantityOrdered) AS Total
+FROM   Orders O, Customers C, OrderDetails OD
+WHERE  O.customerNumber = C.customerNumber
+    AND O.orderNumber = OD.orderNumber
+GROUP BY O.customerNumber
+ORDER BY Total DESC;
