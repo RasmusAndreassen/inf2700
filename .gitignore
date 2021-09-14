@@ -1,5 +1,6 @@
-sql-tester/testsql
-Makefile
-docs/report.aux
-docs/report.dvi
-docs/report.log
+assignment-1/sql-tester/testsql
+assignment-1/Makefile
+assignment-1/docs/report.aux
+assignment-1/docs/report.dvi
+assignment-1/docs/report.log
+assignment-1/docs/report.tex
