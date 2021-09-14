@@ -1,0 +1,5 @@
+sql-tester/testsql
+Makefile
+docs/report.aux
+docs/report.dvi
+docs/report.log

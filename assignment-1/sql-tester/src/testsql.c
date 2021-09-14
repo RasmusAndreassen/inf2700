@@ -109,7 +109,15 @@ int prepare_test(char const* const test_dir,
   }
   spec = next_line(spec);
 
-  /* TODO: open testdb. return 0 upon failure */
+// TODO: might not be finished
+
+  int res_code =
+  sqlite3_open("messages.sqlite3", &db);
+  if (res_code != SQLITE_OK) {
+    printf("%s\n", sqlite3_errmsg(res_code));
+    terminate_test();
+    return 0;
+  }
 
   char query_file_name[32];
   if (!parse_spec_token("query_file: %s",
@@ -175,9 +183,10 @@ char const* get_query_str(char const* const query_name) {
 
 int query_exec(char const* const query_name,
                char* const query_res,
-	       const size_t res_len,
+	             const size_t res_len,
                char* const query_err,
-	       const size_t err_len) {
+	             const size_t err_len)
+{
   char const* query_p = get_query_str(query_name);
   if (!query_p) {
     snprintf(query_err, err_len,
@@ -192,6 +201,10 @@ int query_exec(char const* const query_name,
      - if anything goes wrong (like "test not found" above),
        return 0 with the error message in query_err
   */
+  char *err_p;
+  int err_code = 
+  sqlite3_exec(db, query_p, NULL, NULL, &err_p);
+
 
   return 1;
 }
@@ -227,7 +240,12 @@ void run_test() {
 
 void terminate_test() {
 
-  /* TODO: close db */
+  int res_code = 1;
+
+  sqlite3_finalize();
+
+  while (res_code != SQLITE_OK)
+      res_code = sqlite3_close(db);
 
   if (spec_buff) {
     free(spec_buff);
