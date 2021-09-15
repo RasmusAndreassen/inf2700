@@ -207,7 +207,7 @@ int query_exec(char const* const query_name,
   sqlite3_stmt *statement;
   int out_code = sqlite3_prepare(db, query_p, query_len, &statement, NULL);
   if (out_code != SQLITE_OK) {
-    strncpy(query_err, sqlite3_errmsg(db), err_len);
+    snprintf(query_err, err_len, "test \"%s\" error: %s", query_name, sqlite3_errmsg(db));
     return 0;
   }
 
