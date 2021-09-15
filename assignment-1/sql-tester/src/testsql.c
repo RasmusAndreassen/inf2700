@@ -4,6 +4,8 @@
 #include <unistd.h>
 #include <sqlite3.h>
 
+#define MIN(x,y) (x<y)?x:y
+
 sqlite3 *db = 0;
 char* spec_buff = 0;
 char const* spec = 0;
@@ -112,9 +114,9 @@ int prepare_test(char const* const test_dir,
 // TODO: might not be finished
 
   int res_code =
-  sqlite3_open("messages.sqlite3", &db);
+  sqlite3_open(testdb_file_name, &db);
   if (res_code != SQLITE_OK) {
-    printf("%s\n", sqlite3_errmsg(res_code));
+    printf("%s\n", sqlite3_errmsg(db));
     terminate_test();
     return 0;
   }
@@ -140,9 +142,9 @@ int prepare_test(char const* const test_dir,
 }
 
 int get_next_query(char* const query_name,
-		   const size_t query_name_len,
+		               const size_t query_name_len,
                    char* const expectation,
-		   const size_t expectation_len) {
+		               const size_t expectation_len) {
   if (!spec) return 0;
 
   spec = strstr(spec, "query:");
@@ -201,10 +203,32 @@ int query_exec(char const* const query_name,
      - if anything goes wrong (like "test not found" above),
        return 0 with the error message in query_err
   */
-  char *err_p;
-  int err_code = 
-  sqlite3_exec(db, query_p, NULL, NULL, &err_p);
+ 
+  sqlite3_stmt *statement;
+  int out_code = sqlite3_prepare(db, query_p, query_len, &statement, NULL);
+  if (out_code != SQLITE_OK) {
+    strncpy(query_err, sqlite3_errmsg(db), err_len);
+    return 0;
+  }
 
+  char *stylus = query_res,
+       *end    = query_res+res_len;
+
+  while ((sqlite3_step(statement) == SQLITE_ROW) && (stylus < end)) {
+
+    for (int i = 0; (i < sqlite3_column_count(statement)) && (stylus < end); i++) {
+      stylus +=
+      sprintf(stylus, "|%s", sqlite3_column_text(statement, i));
+    }
+
+    stylus +=
+    sprintf(stylus, "|\n");
+
+    
+  }
+  
+
+  sqlite3_finalize(statement);
 
   return 1;
 }
@@ -242,7 +266,6 @@ void terminate_test() {
 
   int res_code = 1;
 
-  sqlite3_finalize();
 
   while (res_code != SQLITE_OK)
       res_code = sqlite3_close(db);

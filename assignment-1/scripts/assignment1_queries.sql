@@ -50,7 +50,7 @@ FROM  (SELECT DISTINCT customerNumber, customerName, productCode
                FROM    Orders sO NATURAL JOIN OrderDetails sOD
                WHERE   sO.customerNumber = 219) KL/* key list*/) L --actual list
 GROUP BY  customerNumber
-HAVING  COUNT(*) IN (SELECT COUNT(*)
+HAVING  COUNT(*) = ALL (SELECT COUNT(*)
         FROM    Orders sO NATURAL JOIN OrderDetails sOD
         WHERE   sO.customerNumber = 219)
    AND customerNumber != 219
