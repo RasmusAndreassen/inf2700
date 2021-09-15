@@ -198,37 +198,33 @@ int query_exec(char const* const query_name,
 
   size_t query_len = strstr(query_p, ";\n") - query_p + 1;
 
-  /* TODO: run the query
-     - put the query result in query_res
-     - if anything goes wrong (like "test not found" above),
-       return 0 with the error message in query_err
-  */
+
  
   sqlite3_stmt *statement;
-  int out_code = sqlite3_prepare(db, query_p, query_len, &statement, NULL);
+  int out_code = sqlite3_prepare(db, query_p, query_len, &statement, NULL); // generate a statement
   if (out_code != SQLITE_OK) {
-    snprintf(query_err, err_len, "test \"%s\" error: %s", query_name, sqlite3_errmsg(db));
+    snprintf(query_err, err_len, "test \"%s\" error: %s", query_name, sqlite3_errmsg(db)); //check for errors
     return 0;
   }
 
-  char *stylus = query_res,
-       *end    = query_res+res_len;
+  char *stylus = query_res,         // stylus to write output to query_res without changing the value of query_res itself
+       *end    = query_res+res_len; // future-proof check for end of result buffer
 
-  while ((sqlite3_step(statement) == SQLITE_ROW) && (stylus < end)) {
+  while ((sqlite3_step(statement) == SQLITE_ROW) && (stylus < end)) { // write until no more output or no more buffer space
 
     for (int i = 0; (i < sqlite3_column_count(statement)) && (stylus < end); i++) {
       stylus +=
-      sprintf(stylus, "|%s", sqlite3_column_text(statement, i));
+      sprintf(stylus, "|%s", sqlite3_column_text(statement, i));  // this prints every column in every row
     }
 
     stylus +=
-    sprintf(stylus, "|\n");
+    sprintf(stylus, "|\n"); // end of the row
 
     
   }
   
 
-  sqlite3_finalize(statement);
+  sqlite3_finalize(statement);  // tidyup
 
   return 1;
 }
@@ -264,11 +260,7 @@ void run_test() {
 
 void terminate_test() {
 
-  int res_code = 1;
-
-
-  while (res_code != SQLITE_OK)
-      res_code = sqlite3_close(db);
+  while (sqlite3_close(db) != SQLITE_OK);
 
   if (spec_buff) {
     free(spec_buff);
