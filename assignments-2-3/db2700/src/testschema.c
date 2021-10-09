@@ -87,11 +87,14 @@ void test_tbl_natural_join(char const* my_tbl, char const* yr_tbl) {
   tbl_p tbl_m = get_table(my_tbl);
   tbl_p tbl_y = get_table(yr_tbl);
 
-  table_natural_join(tbl_m, tbl_y);
+  tbl_p tbl_o = table_natural_join(tbl_m, tbl_y);
+
+  table_display(tbl_o);
+
 
   put_db_info(DEBUG);
   close_db();
-  /* put_pager_info(DEBUG, "After close_db"); */
+  //put_pager_info(INFO, "After close_db");
 
   put_pager_profiler_info(INFO);
   put_msg(INFO,  "test_tbl_natural_join() done.\n\n");

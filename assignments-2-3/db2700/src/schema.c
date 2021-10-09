@@ -8,6 +8,8 @@
 #include "pmsg.h"
 #include <string.h>
 
+static void display_record(record,schema_p);
+
 /** @brief Field descriptor */
 typedef struct field_desc_struct {
   char *name;        /**< field name */
@@ -225,6 +227,13 @@ int schema_len(schema_p sch) {
 
 const char tables_desc_file[] = "db.db"; /***< File holding table descriptors */
 
+/** @b concat_names
+ * 
+ * returns pointer to an allocated string consisting of the two names separated by
+ * @ref sep. Is caller responsibility to free pointer
+ * 
+ * @param sep
+ */
 static char* concat_names(char const* name1, char const* sep, char const* name2) {
   char *res = malloc((sizeof name1) + (sizeof sep) + (sizeof name2) + 1);
   strcpy(res, name1);
@@ -245,6 +254,10 @@ static void save_tbl_desc(FILE *fp, tbl_p tbl) {
   fprintf(fp, "%d\n", tbl->num_records);
 }
 
+/** @b save_tbl_descs
+ * 
+ * write all table descriptors in memory back to drive
+ */
 static void save_tbl_descs() {
   /* backup the descriptors first in case we need some manual investigation */
   char *tbl_desc_backup = concat_names("__backup", "_", tables_desc_file);
@@ -263,6 +276,10 @@ static void save_tbl_descs() {
   fclose(dbfile);
 }
 
+/** @b read_tbl_descs
+ * 
+ * reads table descriptors into memory
+ */
 static void read_tbl_descs() {
   FILE *fp = fopen(tables_desc_file, "r");
   if (!fp) return;
@@ -295,6 +312,10 @@ static void read_tbl_descs() {
   fclose(fp);
 }
 
+/** @b open_db
+ * 
+ * initialises pager, and reads the table descriptors into memory
+ */
 int open_db(void) {
   pager_terminate(); /* first clean up for a fresh start */
   pager_init();
@@ -302,12 +323,21 @@ int open_db(void) {
   return 1;
 }
 
+/** @b open_db
+ * 
+ * writes the table descriptors to drive, and terminates pager
+ */
 void close_db(void) {
   save_tbl_descs();
   db_tables = 0;
   pager_terminate();
 }
 
+/** @b new_schema
+ * 
+ * Returns a new schema with a pre-allocated, pre-inserted
+ * table descriptor
+ */
 schema_p new_schema(char const* name) {
   tbl_p tbl = malloc(sizeof (tbl_desc_struct));
   tbl->sch = make_schema(name);
@@ -319,13 +349,27 @@ schema_p new_schema(char const* name) {
   return tbl->sch;
 }
 
+/** @b get_table
+ * 
+ * Finds and returns the first table which schema name matches
+ * the given name, otherwise returns @b NULL
+ * 
+ * @param name
+ */
 tbl_p get_table(char const* name) {
   for (tbl_p tbl = db_tables; tbl; tbl = tbl->next)
     if (strcmp(name, tbl->sch->name) == 0)
       return tbl;
-  return 0;
+  return NULL;
 }
 
+/** @b get_schema
+ * 
+ * Finds and returns the first schema which name matches
+ * the given name, otherwise returns @b NULL
+ * 
+ * @param name
+ */
 schema_p get_schema(char const* name) {
   tbl_p tbl = get_table(name);
   if (tbl) return tbl->sch;
@@ -358,6 +402,13 @@ void remove_schema(schema_p s) {
   if (s) remove_table(s->tbl);
 }
 
+/** @b dup_field
+ * 
+ * creates a new field that is a copy of f,
+ * but doesn't add it to any table
+ * 
+ * @param f source
+ */
 static field_desc_p dup_field(field_desc_p f) {
   field_desc_p res = malloc(sizeof (field_desc_struct));
   res->name = strdup(f->name);
@@ -368,6 +419,13 @@ static field_desc_p dup_field(field_desc_p f) {
   return res;
 }
 
+/** @b copy_schema
+ * 
+ * returns a brand new schema with the same fields as the old schema
+ * 
+ * @param s           source to copy
+ * @param dest_name   name of new schema
+ */
 static schema_p copy_schema(schema_p s, char const* dest_name) {
   if (!s) return 0;
   schema_p dest = new_schema(dest_name);
@@ -376,12 +434,26 @@ static schema_p copy_schema(schema_p s, char const* dest_name) {
   return dest;
 }
 
+/** @b copy_schema
+ * 
+ * returns the the field of 
+ * 
+ * @param s      source to search
+ * @param name   name of new schema
+ */
 static field_desc_p get_field(schema_p s, char const* name) {
   for (field_desc_p f = s->first; f; f = f->next)
     if (strcmp(f->name, name) == 0) return f;
   return 0;
 }
 
+/** @b tmp_schema_name
+ * 
+ * returns a temporary name based on the operation name and the table name
+ * 
+ * @param op_name  operation name
+ * @param name     table name
+ */
 static char* tmp_schema_name(char const* op_name, char const* name) {
   char *res = malloc((sizeof op_name) + (sizeof name) + 10);
   int i = 0;
@@ -392,6 +464,11 @@ static char* tmp_schema_name(char const* op_name, char const* name) {
   return res;
 }
 
+/** @b make_sub_schema
+ * @param s          source schema
+ * @param num_fields number of fields to duplicate
+ * @param fields     name of fields to duplicate
+ */
 static schema_p make_sub_schema(schema_p s, int num_fields, char *fields[]) {
   if (!s) return 0;
 
@@ -414,6 +491,13 @@ static schema_p make_sub_schema(schema_p s, int num_fields, char *fields[]) {
   return res;
 }
 
+/** @b add_field
+ * 
+ * adds a new field to the target schema
+ * 
+ * @param s  destination schema
+ * @param f  field to add to schema
+ */
 int add_field(schema_p s, field_desc_p f) {
   if (!s) return 0;
   if (s->len + f->len > BLOCK_SIZE - PAGE_HEADER_SIZE) {
@@ -436,6 +520,12 @@ int add_field(schema_p s, field_desc_p f) {
   return s->num_fields;
 }
 
+/** @b new_record
+ * 
+ * returns a new record
+ * 
+ * @param s 
+ */
 record new_record(schema_p s) {
   if (!s) {
     put_msg(ERROR,  "new_record: NULL schema!\n");
@@ -452,10 +542,21 @@ record new_record(schema_p s) {
   return res;
 }
 
+/** @b release_record
+ * 
+ * frees the memory of the record, based on the details in the schema.
+ * make sure they match!
+ * 
+ * @param r  record to free
+ * @param s  containing schema
+ */
 void release_record(record r, schema_p s) {
-  if (!(r && s)) {
-    put_msg(ERROR,  "release_record: NULL record or schema!\n");
+  if (!r) {
+    put_msg(ERROR,  "release_record: NULL record!\n");
     return;
+  }
+  if (!s) {
+    put_msg(ERROR, "release_record: NULL schema!\n");
   }
   for (size_t i = 0; i < s->num_fields; i++)
     free(r[i]);
@@ -463,14 +564,38 @@ void release_record(record r, schema_p s) {
   r = 0;
 }
 
+/** @b assign_int_field
+ * 
+ * assigns the integer value of int_val to the field field_p.
+ * field should be field(attribute) of record
+ * 
+ * @param field_p
+ * @param int_val
+ */
 void assign_int_field(void const* field_p, int int_val) {
   *(int *)field_p = int_val;
 }
 
+/** @b assign_int_field
+ * 
+ * copies the string in str_val to the field field_p.
+ * field should be field(attribute) of record
+ * 
+ * @param field_p
+ * @param str_val
+ */
 void assign_str_field(void* field_p, char const* str_val) {
   strcpy(field_p, str_val);
 }
 
+/** @b fill_record
+ * 
+ * fills the record with the provided values, according to the schema format.
+ * make sure that record and schema match!
+ * 
+ * @param r   record to assign values to
+ * @param s   schema for format reference
+ */
 int fill_record(record r, schema_p s, ...) {
   if (!(r && s)) {
     put_msg(ERROR,  "fill_record: NULL record or schema!\n");
@@ -489,6 +614,16 @@ int fill_record(record r, schema_p s, ...) {
   return 1;
 }
 
+/** @b fill_sub_record
+ * 
+ * linearly fills all fields of destination record with values from source record,
+ * based on their respective shema
+ * 
+ * @param dest_r
+ * @param dest_s
+ * @param src_r
+ * @param src_s
+ */
 static void fill_sub_record(record dest_r, schema_p dest_s,
                             record src_r, schema_p src_s) {
   field_desc_p src_f, dest_f;
@@ -505,6 +640,14 @@ static void fill_sub_record(record dest_r, schema_p dest_s,
   }
 }
 
+/** @b equal_record
+ * 
+ * compares the given records by each entry based on schema
+ * 
+ * @param r1 record to be compared
+ * @param r2 record to be compared
+ * @param s  record schema
+ */
 int equal_record(record r1, record r2, schema_p s) {
   if (!(r1 && r2 && s)) {
     put_msg(ERROR,  "equal_record: NULL record or schema!\n");
@@ -525,7 +668,13 @@ int equal_record(record r1, record r2, schema_p s) {
   }
   return 1;
 }
-
+/** @b set_tbl_position
+ * 
+ * sets the current r/w-position to either beginning or end of the table
+ * 
+ * @param t table to set position of
+ * @param pos TBL_BEG for beginning of table, TBL_END for end
+ */
 void set_tbl_position(tbl_p t, tbl_position pos) {
   switch (pos) {
   case TBL_BEG:
@@ -539,6 +688,9 @@ void set_tbl_position(tbl_p t, tbl_position pos) {
   }
 }
 
+/** @b eot
+ * returns true if the position is at the end of the table
+ */
 int eot(tbl_p t) {
   return (peof(t->current_pg));
 }
@@ -554,7 +706,12 @@ static int page_valid_pos_for_put_with_schema(page_p p, schema_p s) {
   return (page_valid_pos_for_put(p, page_current_pos(p), s->len)
           && (page_current_pos(p) - PAGE_HEADER_SIZE) % s->len == 0);
 }
-
+/** @b get_page_for_next_record
+ * 
+ * finds and returns the page containing the next record
+ * 
+ * @param s
+ */
 static page_p get_page_for_next_record(schema_p s) {
   page_p pg = s->tbl->current_pg;
   if (peof(pg)) return 0;
@@ -571,7 +728,14 @@ static page_p get_page_for_next_record(schema_p s) {
   }
   return pg;
 }
-
+/** @b get_page_record
+ * 
+ * fills in r with the record at the current position of the page
+ * 
+ * @param r to be written to
+ * @param s for reference
+ * @param p page to read from
+ */
 static int get_page_record(page_p p, record r, schema_p s) {
   if (!p) return 0;
   if (!page_valid_pos_for_get_with_schema(p, s)) {
@@ -589,6 +753,13 @@ static int get_page_record(page_p p, record r, schema_p s) {
   return 1;
 }
 
+/** @b get_record
+ * 
+ * fully abstracts away pager, read record from current position of schema
+ * 
+ * @param r record space to write to
+ * @param s schema to read from
+ */
 int get_record(record r, schema_p s) {
   page_p pg = get_page_for_next_record(s);
   return pg ? get_page_record(pg, r, s) : 0;
@@ -637,13 +808,114 @@ static int find_record_int_val(record r, schema_p s, int offset,
   return 0;
 }
 
+typedef struct reference_of_page_extremities{
+  int blknum;
+  int high;
+  int low;
+} ref_page_t;
+
+static enum {
+  DONE = 0,
+  CONTINUE
+};
+
+static int lfind_record_int_val(record r, schema_p s, int offset, int val)
+{
+  page_p pg = get_page_for_next_record(s);
+  if (!pg) return DONE;
+  int pos, rec_val;
+  for (; pg; pg = get_page_for_next_record(s)) {
+    pos = page_current_pos(pg);
+    rec_val = page_get_int_at (pg, pos + offset);
+    if (rec_val == val) {
+      page_set_current_pos(pg, pos);
+      get_page_record(pg, r, s);
+      return CONTINUE;
+    }
+    else
+      return DONE;
+  }
+  return DONE;
+}
+
+static int bfind_page_record_int_val(schema_p s, ref_page_t page, int offset, int val)
+{
+  int rec_val, pos, res;
+  page_p pg = get_page(s->name, page.blknum);
+  while (pos != page.low) {
+    pos = page.high + page.low / 2;
+    rec_val = page_get_int_at(pg, pos+offset);
+    
+    if (rec_val == val) {
+      rec_val = page_get_int_at(pg, pos - s->len + offset);
+      if (rec_val != val)
+        return pos;
+      else {
+        page.high = pos - s->len;
+        continue;
+      }
+    } else if (rec_val < val) {
+      page.low = pos - s->len;
+      continue;
+    } else if (rec_val > val) {
+      page.high = pos - s->len;
+      continue;
+    }
+  }
+
+  return -1;
+}
+
+static int bfind_first_int_val(schema_p s, int offset, int val)
+{
+
+  ref_page_t high, low;
+  page_p pg;
+  int pos, n_records, rec_val;
+
+  // first check first block
+
+  pg = get_page(s->name, 0);
+  if (!pg)
+    return 0;
+  
+  low.low = page_seek(pg, P_BEG, offset) - offset;
+  rec_val = page_get_int(pg);
+
+  if (rec_val > val) { // when the reference value is lower than the lowest value
+    return 0;
+  } else if (rec_val == val) { // found at beginning of table
+    page_seek(pg, P_BEG, 0);
+    return 1;
+  }
+
+  low.high = page_seek(pg, P_END, -s->len);
+  rec_val = page_get_int_at(pg, low.high);
+
+  pg = get_page_for_append(s->name); // get last entry
+
+
+
+  return 0;
+}
+
+/** @b put_page_record
+ * 
+ * write the provided record (of format in schema)
+ * to current position of page
+ * 
+ * @param p  destination page
+ * @param r  record to be written
+ * @param s  format schema
+ */
 static int put_page_record(page_p p, record r, schema_p s) {
   if (!page_valid_pos_for_put_with_schema(p, s))
     return 0;
 
   field_desc_p fld_desc;
   size_t i = 0;
-  for (fld_desc = s->first; fld_desc;
+  for (fld_desc = s->first;
+       fld_desc;
        fld_desc = fld_desc->next, i++)
     if (is_int_field(fld_desc))
       page_put_int(p, *(int *)r[i]);
@@ -652,6 +924,13 @@ static int put_page_record(page_p p, record r, schema_p s) {
   return 1;
 }
 
+/** @b put_page_record
+ * 
+ * writes the provided record to the current position of the schema
+ * 
+ * @param r  record to be written
+ * @param s  target schema
+ */
 int put_record(record r, schema_p s) {
   page_p p = s->tbl->current_pg;
 
@@ -669,6 +948,13 @@ int put_record(record r, schema_p s) {
   return 1;
 }
 
+/** @b append_record
+ * 
+ * writes the provided record to the end of the schema
+ * 
+ * @param r  record to be written
+ * @param s  target schema
+ */
 void append_record(record r, schema_p s) {
   tbl_p tbl = s->tbl;
   page_p pg = get_page_for_append(s->name);
@@ -741,7 +1027,7 @@ void table_display(tbl_p t) {
 }
 
 /* We restrict ourselves to equality search on an int attribute */
-tbl_p table_search(tbl_p t, char const* attr, char const* op, int val) {
+tbl_p table_search(tbl_p t, char const* attr, char const* op, int val, int b_search) {
   if (!t) return 0;
 
   int (*cmp_op)() = 0;
@@ -755,14 +1041,15 @@ tbl_p table_search(tbl_p t, char const* attr, char const* op, int val) {
   else if (strcmp(op, "<") == 0)
     cmp_op = int_l;
 
-  else if (strcmp(op, ">") == 0)
-    cmp_op = int_g;
-
   else if (strcmp(op, "<=") == 0)
     cmp_op = int_le;
 
+  else if (strcmp(op, ">") == 0)
+    cmp_op = int_g;
+
   else if (strcmp(op, ">=") == 0)
     cmp_op = int_ge;
+
 
   if (!cmp_op) {
     put_msg(ERROR, "unknown comparison operator \"%s\".\n", op);
@@ -789,12 +1076,20 @@ tbl_p table_search(tbl_p t, char const* attr, char const* op, int val) {
 
   record rec = new_record(s);
 
+  //TODO: replace this too
   set_tbl_position(t, TBL_BEG);
-  while (find_record_int_val(rec, s, f->offset, cmp_op, val)) {
-    put_record_info(DEBUG, rec, s);
-    append_record(rec, res_sch);
+  if (b_search && cmp_op == int_eq){
+    
+  while (lfind_record_int_val(rec, s, f->offset, val)) {
+
+  }
+  } else {
+    while (find_record_int_val(rec, s, f->offset, cmp_op, val)) {
+      append_record(rec, res_sch);
+    }
   }
 
+  put_db_info(DEBUG);
   release_record(rec, s);
 
   return res_sch->tbl;
@@ -826,9 +1121,23 @@ tbl_p table_natural_join(tbl_p left, tbl_p right) {
     return 0;
   }
 
-  tbl_p res = 0;
+  tbl_p res = NULL;
+  
+  // char *joined_name = concat_names(left->sch->name, "__join__", right->sch->name);
+  // schema_p sch = copy_schema(left->sch, joined_name);
+  // free(joined_name);
 
-  /* TODO: assignment 3 */
+  // for (field_desc_p 
+  //       fl = left->sch->first;
+  //       fl && fr;
+  //     {
+
+  //       fr = right->sch->first;
+    
+    
+  // }
+  
+  // res = sch->tbl;
 
   return res;
 }

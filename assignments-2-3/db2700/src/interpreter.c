@@ -34,6 +34,8 @@ static const char* const t_int = "int";
 
 static FILE *in_s; /* input stream, default to stdin */
 
+int b_search = 0;
+
 static int init_with_options (int argc, char* argv[]) {
   char cmd_file[MAX_LINE_WIDTH] = "";
   char db_dir[MAX_LINE_WIDTH] = "";
@@ -41,7 +43,7 @@ static int init_with_options (int argc, char* argv[]) {
 
   msglevel = INFO;
 
-  while ((c = getopt(argc, argv, "hm:d:c:")) != -1)
+  while ((c = getopt(argc, argv, "hm:d:c:b:")) != -1)
     switch (c) {
     case 'h':
       printf("Usage: runtest [switches]\n");
@@ -64,8 +66,19 @@ static int init_with_options (int argc, char* argv[]) {
     case 'c':
       strcpy(cmd_file, optarg);
       break;
+    case 'b':
+      switch (optarg[0])
+      {
+      case 't':
+      case 'y': b_search = 1;break;
+      case 'f':
+      case 'n': b_search = 0;break;
+      default:
+        printf("Option -b requires arguments yes/no or true/false\n");
+        abort();
+      }
     case '?':
-      if (optopt == 'm' || optopt == 'd' || optopt == 'c')
+      if (optopt == 'm' || optopt == 'd' || optopt == 'c' || optopt == 'b')
         printf("Option -%c requires an argument.\n", optopt);
       else if (isprint(optopt))
         printf("Unknown option `-%c'.\n", optopt);
@@ -590,7 +603,8 @@ static void select_rows() {
     where_tbl = table_search(join_tbl ? join_tbl : slct->from_tbl,
                              slct->where_attr,
                              slct->where_op,
-                             slct->where_val);
+                             slct->where_val,
+                             b_search);
     if (!where_tbl) {
       release_select_desc(slct);
       return;
@@ -622,6 +636,9 @@ void interpret(int argc, char* argv[]) {
     if (in_s == stdin)
       printf("db2700> ");
     if (!next_token(token)) {
+      if (feof(in_s)) // need to check for feof, because next_token doesn't skip whitespace after a token
+        return;
+
       put_msg(ERROR, "Getting input failed\n");
       exit(EXIT_FAILURE);
     }

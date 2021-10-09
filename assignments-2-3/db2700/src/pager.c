@@ -657,6 +657,10 @@ static int same_block(block_p b1, block_p b2) {
           && (b1->blk_nr == b2->blk_nr));
 }
 
+static int is_first_block(block_p b) {
+  return (b->blk_nr == 0);
+}
+
 static int is_last_block(block_p b) {
   return (b->blk_nr == b->fhandle->num_blocks - 1);
 }
@@ -794,6 +798,12 @@ page_p get_next_page(page_p p) {
   return get_page(p->block->fhandle->fname, blk_nr);
 }
 
+/** returns previous page of file, or null if page is first page */
+page_p get_previous_page(page_p p) {
+  return is_first_block(p->block) ?
+    NULL : get_page(p->block->fhandle->fname, p->block->blk_nr + 1);
+}
+
 void page_set_pos_begin(page_p p) {
   if (p)
     p->current_pos = PAGE_HEADER_SIZE;
@@ -894,6 +904,47 @@ int page_set_current_pos(page_p p, int pos) {
     return -1;
   }
   p->current_pos = pos;
+  return p->current_pos;
+}
+
+int page_seek(page_p p, int whence, int offset) {
+  if (!p) {
+    put_msg(ERROR, "page_seek: NULL page.\n");
+    return -1;
+  }
+  switch (whence)
+  {
+  case P_BEG:
+    if (offset < 0 || PAGE_HEADER_SIZE + offset > p->free_pos) {
+      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
+      return -1;
+    }
+    p->current_pos = PAGE_HEADER_SIZE + offset;
+  
+  break;
+  case P_NOW:
+    if (p->current_pos + offset < PAGE_HEADER_SIZE || p->current_pos + offset >= p->free_pos) {
+      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
+      return -1;
+    }
+
+    p->current_pos += offset;
+
+  break;
+  case P_END:
+    if (p->free_pos + offset < PAGE_HEADER_SIZE || offset > 0) {
+      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
+      return -1;
+    }
+
+    p->current_pos = p->free_pos + offset;
+
+  break;
+  default:
+    put_msg(ERROR, "page_seek: reached invalid point.\n");
+    return -1;
+  }
+
   return p->current_pos;
 }
 

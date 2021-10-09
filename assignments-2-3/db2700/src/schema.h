@@ -160,7 +160,7 @@ extern void remove_table(tbl_p t);
 extern void table_display(tbl_p s);
 /** Make a new table as the result of a search. */
 extern tbl_p table_search(tbl_p t, char const* attr,
-                          char const* op, int val);
+                          char const* op, int val, int b_search);
 /** Make a new table as a result of project. */
 extern tbl_p table_project(tbl_p t, int num_fields, char* fields[]);
 /** Join two tables and return the joined table. */

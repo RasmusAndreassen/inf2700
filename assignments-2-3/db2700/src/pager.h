@@ -143,6 +143,13 @@ extern int page_current_pos(page_p p);
 /** Set page's current position. */
 extern int page_set_current_pos(page_p p, int pos);
 
+enum whence{
+  P_BEG,
+  P_NOW,
+  P_END,
+};
+extern int page_seek(page_p p, int whence, int offset);
+
 /** Check if @em offset is valid for getting a value */
 extern int page_valid_pos_for_get(page_p p, int offset);
 /** Check if @em offset is valid for putting a value with lenth @em len */
