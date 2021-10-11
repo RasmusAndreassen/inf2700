@@ -1,14 +1,18 @@
-from math import ceil
+from math import ceil, sqrt
 from os import remove
 from time import sleep
-from subprocess import PIPE, run
+from subprocess import PIPE, TimeoutExpired, run
 from sys import argv, exit, stderr
 from random import randint, choices, sample
 from string import ascii_lowercase
 from typing import Generator, Iterable
 
+from cfg import BFNAME, FNAMES, GFNAME, LFNAME, QFNAME, T_NAME
+
 SUPPRESS=False
 BENCHMARK=False
+DEBUG=False
+
 
 ids:list[int] = []
 
@@ -72,8 +76,8 @@ class Field:
               value = randint(1,max)
       case 'str':
         upper_bound = max if max is not None else self.len
-        n = randint(1,upper_bound)
-        value = ''.join(choices(ascii_lowercase, k=n))
+        len = randint(1,upper_bound)
+        value = ''.join(choices(ascii_lowercase, k=len))
 
     return value
 
@@ -156,25 +160,25 @@ class Schema:
   def __str__(self):
     return '('+','.join(str(field) for field in self.fields)+')'
 
-def gen_genTable_file(n:int, s:Schema, fname:str, tname:str):
+def gen_genTable_file(N:int, s:Schema):
   # open .sql file
-  f = open(fname, "w")
+  f = open(GFNAME, "w")
 
   # make the table
-  f.write('create table {} {};\n'.format(tname, s))
+  f.write('create table {} {};\n'.format(T_NAME, s))
 
   # write insert statements
-  for i in range(n):
+  for i in range(N):
     r = s.next_record()
     values = ','.join(str(value) for value in r)
-    istr = 'insert into {} values ({});\n'.format(tname, values)
+    istr = 'insert into {} values ({});\n'.format(T_NAME, values)
     #print(s)
     f.write(istr)
   f.write('quit')
 
-def gen_table(n:int, s:Schema, fname:str, tname:str):
-  gen_genTable_file(n,s,fname,tname)
-  res = run(['./run_front', '-n', '-c{}'.format(fname)], text=True, stdout=PIPE, )
+def gen_table(N:int, s:Schema):
+  gen_genTable_file(N,s)
+  res = run(['./run_front', '-n', '-c{}'.format(GFNAME)], text=True, stdout=PIPE, )
   print(res.stdout)
   # res = run(['./run_front', '-n', ], text=True, input='show database', stdout=PIPE, stderr=PIPE)
   # print(res.stderr)
@@ -193,8 +197,8 @@ def print_tests():
       for q in q:
         print('-', q)
 
-def gen_queries(n:int, s:Schema, table_name:str):
-  search_value = randint(0,2048+n)
+def gen_queries(N:int, np:int, n:int, s:Schema):
+  search_value = randint(0,2048+N)
   
   # compute key values
   recs_per_page = (BLOCK_SIZE-PAGE_HEADER_SIZE)// s.len
@@ -205,71 +209,73 @@ def gen_queries(n:int, s:Schema, table_name:str):
   search_value = s.history[0]['val']
   tests["== Select first value"] = (
     search_value,
-    select.format(table_name, search_value)
+    select.format(T_NAME, search_value)
   )
 
   search_value = s.last()['val']
   tests["== Select last value"] = (
     search_value,
-    select.format(table_name, search_value)
+    select.format(T_NAME, search_value)
   )
 
   search_value = s.history[recs_per_page-1]['val']
   tests["== Select last value of first page"]=(
     search_value,
-    select.format(table_name, search_value)
+    select.format(T_NAME, search_value)
   )
 
   search_value = s.history[(n_pages-1)*recs_per_page]['val']
   tests["== Select first value of last page"] = (
     search_value,
-    select.format(table_name, search_value)
+    select.format(T_NAME, search_value)
   )
 
-  pagens = []
-  for i in range(nrand):
-    n = randint(1,n_pages-2)
-    while n in pagens:
-      n = randint(1,n_pages-2)
-    pagens.append(n)
+  pagenums = []
+  for i in range(np):
+    pagenum = randint(1,n_pages-2)
+    while pagenum in pagenums:
+      pagenum = randint(1,n_pages-2)
+    pagenums.append(pagenum)
 
-  pagens.sort()
-  search_values = (s.history[p_index*recs_per_page]['val'] for p_index in pagens)
-  tests["== Select first value of {} random pages".format(nrand)] = tuple(
+  pagenums.sort()
+  search_values = (s.history[p_index*recs_per_page]['val'] for p_index in pagenums)
+  tests["== Select first value of {} random pages".format(np)] = tuple(
     (
       search_value,
-      select.format(table_name, search_value),
+      select.format(T_NAME, search_value),
     ) for search_value in search_values
   )
 
-  pagens = []
-  for i in range(nrand):
-    n = randint(1,n_pages-2)
-    while n in pagens:
-      n = randint(1,n_pages-2)
-    pagens.append(n)  
+  pagenums = []
+  for i in range(np):
+    pagenum = randint(1,n_pages-2)
+    while pagenum in pagenums:
+      pagenum = randint(1,n_pages-2)
+    pagenums.append(pagenum)  
+  pagenums.sort()
 
-  pagens.sort()
-  search_values = [s.history[(p_index+1)*recs_per_page-1]['val'] for p_index in pagens]
-  tests["== Select last value of {} random pages".format(nrand)] = tuple(
+  search_values = [s.history[(p_index+1)*recs_per_page-1]['val'] for p_index in pagenums]
+  tests["== Select last value of {} random pages".format(np)] = tuple(
     (
       search_value,
-      select.format(table_name, search_value),
+      select.format(T_NAME, search_value),
     ) for search_value in search_values
   )
 
   indeces = []
-  for i in range(nrand):
-    n = randint(0,s.n_records-1)
-    while n in indeces:
-      randint(0,s.n_records-1)
-    indeces.append(n)
+  print(s.n_records-1)
+  for i in range(n):
+    index = randint(0,s.n_records-1)
+    while index in indeces:
+      index = randint(0,s.n_records-1)
+    indeces.append(index)
   indeces.sort()
+
   search_values = [s.history[index]['val'] for index in indeces]
-  tests["== Select {} random present values".format(nrand)] = tuple(
+  tests["== Select {} random present values".format(n)] = tuple(
     (
       search_value,
-      select.format(table_name, search_value)
+      select.format(T_NAME, search_value)
     ) for search_value in search_values
   )
 
@@ -278,22 +284,22 @@ def gen_queries(n:int, s:Schema, table_name:str):
   smallest = s.history[0]['val']
   largest = s.last()['val']
 
-  for i in range(nrand):
+  for i in range(n):
     value = randint(smallest,largest)
     while value in present:
       value = randint(s.history[0]['val'],s.last()['val'])
     search_values.append(value)
-
   search_values.sort()
-  tests["== Select {} random non-present values".format(nrand)] = tuple(
+
+  tests["== Select {} random non-present values".format(n)] = tuple(
     (
       search_value,
-      select.format(table_name, search_value)
+      select.format(T_NAME, search_value)
     ) for search_value in search_values
   )
-def gen_bm_queries(n:int, s:Schema, qfname:str, table_name:str):
-  search_value = randint(0,2048+n)
-  with open(qfname, "w") as f:
+def gen_bm_queries(N:int, s:Schema):
+  search_value = randint(0,2048+N)
+  with open(QFNAME, "w") as f:
     # compute key values
     recs_per_page = (BLOCK_SIZE-PAGE_HEADER_SIZE)// s.len
     n_pages = ceil(s.n_records/recs_per_page)
@@ -302,60 +308,60 @@ def gen_bm_queries(n:int, s:Schema, qfname:str, table_name:str):
 
     # very first
     search_value = s.history[0]['val']
-    f.write(slct.format(table_name, search_value))
+    f.write(slct.format(T_NAME, search_value))
 
     # very last
     search_value = s.last()['val']
-    f.write(slct.format(table_name, search_value))
+    f.write(slct.format(T_NAME, search_value))
 
     # last of first page
     search_value = s.history[recs_per_page-1]['val']
-    f.write(slct.format(table_name, search_value))
+    f.write(slct.format(T_NAME, search_value))
 
     # first of last page
     search_value = s.history[(n_pages-1)*recs_per_page]['val']
-    f.write(slct.format(table_name, search_value))
+    f.write(slct.format(T_NAME, search_value))
 
     pagenums = []
-    for i in range(nrand):
-      n = randint(1,n_pages-2)
-      while n in pagenums:
-        n = randint(1,n_pages-2)
-      pagenums.append(n)
+    for i in range(n):
+      pagenum = randint(1,n_pages-2)
+      while pagenum in pagenums:
+        pagenum = randint(1,n_pages-2)
+      pagenums.append(pagenum)
     pagenums.sort()
 
     # first of random pages
     search_values = [s.history[p_index*recs_per_page]['val'] for p_index in pagenums]
     for search_value in search_values:
-      f.write(slct.format(table_name, search_value))
+      f.write(slct.format(T_NAME, search_value))
 
     pagenums = []
-    for i in range(nrand):
-      n = randint(1,n_pages-2)
-      while n in pagenums:
-        n = randint(1,n_pages-2)
-      pagenums.append(n)  
+    for i in range(n):
+      pagenum = randint(1,n_pages-2)
+      while pagenum in pagenums:
+        pagenum = randint(1,n_pages-2)
+      pagenums.append(pagenum)  
     pagenums.sort()
 
     # last of random pages 
     search_values = [s.history[(p_index+1)*recs_per_page-1]['val'] for p_index in pagenums]
     for search_value in search_values:
-      f.write(slct.format(table_name, search_value))
+      f.write(slct.format(T_NAME, search_value))
       
     
 
     indeces = []
-    for i in range(nrand):
-      n = randint(0,s.n_records-1)
-      while n in indeces:
+    for i in range(n):
+      index = randint(0,s.n_records-1)
+      while index in indeces:
         randint(0,s.n_records-1)
-      indeces.append(n)
+      indeces.append(index)
     indeces.sort()
 
     # completely random present
     search_values = [s.history[index]['val'] for index in indeces]
     for search_value in search_values:
-      f.write(slct.format(table_name, search_value))
+      f.write(slct.format(T_NAME, search_value))
 
     # reference values
     smallest = s.history[0]['val']
@@ -363,7 +369,7 @@ def gen_bm_queries(n:int, s:Schema, qfname:str, table_name:str):
     present = s.all_prev('val')
 
     search_values = []
-    for i in range(nrand):
+    for i in range(n):
       value = randint(smallest,largest)
       while value in present:
         value = randint(s.history[0]['val'],s.last()['val'])
@@ -372,7 +378,7 @@ def gen_bm_queries(n:int, s:Schema, qfname:str, table_name:str):
 
     # nonpresent
     for search_value in search_values:
-      f.write(slct.format(table_name, search_value))
+      f.write(slct.format(T_NAME, search_value))
 
     f.write('show pager\n')
     f.write('quit')
@@ -394,7 +400,7 @@ def run_and_compare(query:str):
     if not SUPPRESS: print('\tfailed')
     if not SUPPRESS: print('expected:', lres, sep='\n')
     if not SUPPRESS: print('got:', bres, sep='\n')
-    if not SUPPRESS: run(['gdb', '--args', 'run_front', '-n', '-by'], text=True, stderr=PIPE)
+    if DEBUG: run(['gdb', '--args', 'run_front', '-n', '-by'], text=True, stderr=PIPE)
 
 def run_queries():
   for test, q in tests.items():
@@ -411,15 +417,15 @@ def run_queries():
   s = "well done!" if total == successes else "too bad..."
   if not SUPPRESS: print("Passed {}/{} tests,".format(successes,total), s)
 
-def run_benchmark(gfname, qfname, tname):
-  with open('bout', 'w+') as bout:
-    with open('lout', 'w+') as lout:
+def run_benchmark():
+  with open(BFNAME, 'w+') as bout:
+    with open(LFNAME, 'w+') as lout:
       try:
-        bout.write(run(['./run_front', '-n', '-by', '-c{}'.format(qfname)], text=True, stderr=PIPE, ).stderr)
-        lout.write(run(['./run_front', '-n', '-c{}'.format(qfname)], text=True, stderr=PIPE, ).stderr)
+        bout.write(run(['./run_front', '-n', '-by', '-c{}'.format(QFNAME)], text=True, stderr=PIPE, ).stderr)
+        lout.write(run(['./run_front', '-n', '-c{}'.format(QFNAME)], text=True, stderr=PIPE, ).stderr)
       except UnicodeDecodeError:
         print('error decoding')
-        cleanup((gfname, qfname, 'bout', 'lout'), tname)
+        cleanup()
         exit(1)
       bout.seek(0)
       lout.seek(0)
@@ -433,103 +439,161 @@ def run_benchmark(gfname, qfname, tname):
       print('linear\t{}'.format(',\t'.join(lres)))
       print('=======================================')
 
-def cleanup(fnames, tname):
-  for fname in fnames:
+def cleanup():
+  for fname in FNAMES:
     try:
       remove(fname)
     except FileNotFoundError:
       continue
-  run(['./run_front', '-n'], text=True, input="drop table {};\nquit".format(tname), )
+  run(['./run_front', '-n'], text=True, input="drop table {};\nquit".format(T_NAME), )
   pass
 
-def superrandom():
+def superrandom(times):
   successes = 0
-  for i in range(1):
-    N = randint(100,10000)
-    n = randint(int(N*0.0125),int(N*0.0375))
-    print('Running tests with N={},n={}'.format(N,n))
-    res:int = run(['python3.10', __file__, str(N), str(n)], text=True, stdout=PIPE).returncode
+  for i in range(times):
+    N = randint(100,100000)
+
+    max = ceil(0.5*sqrt(N))
+    min = ceil(0.01*sqrt(N))
+    np = randint(min,max)
+
+    max = int(0.1*N)
+    min = int(0.001*N)
+    n = randint(min,max)
+    print('Running tests with N={},np={},n={}'.format(N,np,n))
+
+    res:int = run(['python3.10', __file__, str(N), str(np), str(n)], text=True, stdout=PIPE).returncode
     if res == 0:
       print('passed')
+      cleanup()
       successes+=1
-    
-  print('Succeeded {} times out of 1'.format(successes))
+    else:
+      print('failed')
+      cleanup()
+    # except TimeoutExpired:
+    #   print('timed out')
+    #   times-=1
+    #   cleanup()
+    #   continue
+
+  cleanup()
+  print('Succeeded {} times out of {}'.format(successes, times))
   exit(0)
 
+def print_info():
+  print('Usage: {{python}} {} [flags] [N [np [n]]]'.format(argv[0]))
+  print('   or: {{python}} {} --superrandom [times]'.format(argv[0]))
+  print('Runs randomised queries on a randomised table of N entries (default to 1024).')
+  print('  np denotes the number of random pages (default 5) to test')
+  print('  n denotes the number of random values (default 10) to search from in the table. Will search for n present and n nonpresent values.')
+  print(' flags:')
+  print('   --help\t\tprint this and exit')
+  print('   --benchmark\t\trun benchmark of both linear and binary search, results are printed to stdout')
+  print('   --superrandom\truns this program `times` times (default to 5), counting the number of complete successes')
+  print('                \tNOTE: superrandom mode is incredibly slow')
+  print('   --suppress\t\trun without printing results')
+  exit(0)
 if __name__ == '__main__':
-  # get number of entries to create from argv
-  i = 1
   try:
-    while argv[i].startswith('--'):
-      match argv[i][2:]:
-        case 'suppress':
-          SUPPRESS = True
-        case 'benchmark':
-          BENCHMARK = True
-        case 'superrandom':
-          superrandom()
+    # get number of entries to create from argv
+    i = 1
+    try:
+      while argv[i].startswith('--'):
+        match argv[i][2:]:
+          case 'help':
+            print_info()
+          case 'suppress':
+            SUPPRESS = True
+          case 'benchmark':
+            BENCHMARK = True
+          case 'debug':
+            DEBUG=True
+          case 'superrandom':
+            try:
+              superrandom(int(argv[i+1]))
+            except IndexError:
+              print('`times` omitted, defaulting to 5')
+              superrandom(5)
+        i+=1
+    except IndexError:
+      pass
+    try:
+      N:int = int(argv[i])
+    except IndexError:
+      print('`N` omitted, defaulting to 1024')
+      N = 1024
+    except ValueError:
+      print(argv[i],'is not an integer')
+      exit(-1)
+    finally:
       i+=1
-  except IndexError:
-    pass
-  try:
-    n:int = int(argv[i])
-  except IndexError:
-    n = 1024
-  except ValueError:
-    print(argv[i],'is not an integer')
-    exit(-1)
+
+    if N <= 0:
+      print('N must be greater than 0, got', N)
+      exit(-1)
+    
+    try:
+      np = int(argv[i])
+    except IndexError:
+      print('`np` omitted, defaulting to 3')
+      np = 3
+    except ValueError:
+      print(argv[i],'is not an integer')
+      exit(-1)
+    finally:
+      i+=1
 
 
-  if n <= 0:
-    print('n must be greater than 0, got', n)
-    exit(-1)
-  
-  try:
-    nrand = int(argv[i+1])
-  except IndexError:
-    nrand = 5
+    try:
+      n = int(argv[i])
+    except IndexError:
+      print('`n` omitted, defaulting to 10')
+      n = 10
+    except ValueError:
+      print(argv[i],'is not an integer')
+      exit(-1)
+    
 
-  # generate table schema to create
-   # select a random set of field names
-  chosen_attrs = sample(test_field_names, randint(0,len(test_field_names)))
-  index = randint(0,len(chosen_attrs))
-  chosen_attrs.insert(index, 'val') # table should always have field val
-   # generate a mapping of all the chosen field names with their corresponding arguments
-  attributes = dict(item for item in test_fields.items() if item[0] in chosen_attrs)
-  attributes['val']['init'] = randint(0,n)
-  s = Schema(attributes)
+    # generate table schema to create
+    # select a random set of field names
+    chosen_attrs = sample(test_field_names, randint(0,len(test_field_names)))
+    index = randint(0,len(chosen_attrs))
+    chosen_attrs.insert(index, 'val') # table should always have field val
+    # generate a mapping of all the chosen field names with their corresponding arguments
+    attributes = dict(item for item in test_fields.items() if item[0] in chosen_attrs)
+    attributes['val']['init'] = randint(0,N)
+    s = Schema(attributes)
 
-  gfname = 'generate_table.sql'
-  qfname = 'run_queries.sql'
-  tname = 'IntField'
 
-  try:
-    if tname in run(['./run_front', '-n'], text=True, input="show database\nquit", stderr=PIPE).stderr:
-      run(['./run_front', '-n'], input="drop table {}\nquit".format(tname).encode('utf-8'), stderr=PIPE)
-  except UnicodeDecodeError:
-    print('error decoding')
-    cleanup((gfname, qfname), tname)
-    exit(1)
-  
+    try:
+      if T_NAME in run(['./run_front', '-n'], text=True, input="show database\nquit", stderr=PIPE).stderr:
+        run(['./run_front', '-n'], input="drop table {}\nquit".format(T_NAME).encode('utf-8'), stderr=PIPE)
+    except UnicodeDecodeError:
+      print('error decoding')
+      cleanup()
+      exit(1)
+    
 
-  gen_table(n, s, gfname, tname)
+    gen_table(N, s)
 
-  if BENCHMARK:
-    gen_bm_queries(n, s, qfname, tname)
+    if BENCHMARK:
+      gen_bm_queries(N, s)
 
-    run_benchmark(gfname, qfname, tname)
-  else:
-    gen_queries(n, s, qfname, tname)
+      run_benchmark()
+    else:
+      gen_queries(N, np, n, s)
 
-    run_queries(qfname)
-  #sleep(5)
+      run_queries()
+    #sleep(5)
 
-  cleanup((gfname, qfname, 'bout', 'lout'), tname)
+    cleanup()
 
-  if successes == total:
-    exit(0)
-  else:
-    exit(1)
-  #res = run(['./run_front', '-n', '-by',], text=True, input='help', stdout=PIPE)
-  #print_tests()
-  #print(res.stdout)
+    if successes == total:
+      exit(0)
+    else:
+      exit(1)
+    #res = run(['./run_front', '-n', '-by',], text=True, input='help', stdout=PIPE)
+    #print_tests()
+    #print(res.stdout)
+  finally:
+    cleanup()
