@@ -105,6 +105,7 @@ class Schema:
           del field['init']
         self.fields.append(Field(name, **field))
       self.history:list[dict] = []
+      self.f_history:dict[str,list] = {}
 
       self.len = sum(field.len for field in self.fields)
       self.n_records = 0
@@ -113,6 +114,10 @@ class Schema:
     return self.history[len(self.history)-1] if len(self.history) > 0 else None
 
   def all_prev(self, f_name:str):
+    try:
+      return self.f_history[f_name]
+    except KeyError:
+      return []
     return [record[f_name] for record in self.history]
 
   def next_record(self) -> list:
@@ -138,6 +143,10 @@ class Schema:
       val = field.random(val=val)
 
       new[field.name] = val
+      try:
+        self.f_history[field.name].append(val)
+      except KeyError:
+        self.f_history[field.name] = [val]
 
     self.history.append(new)
     self.n_records += 1
@@ -169,7 +178,6 @@ def gen_table(n:int, s:Schema, fname:str, tname:str):
   print(res.stdout)
   # res = run(['./run_front', '-n', ], text=True, input='show database', stdout=PIPE, stderr=PIPE)
   # print(res.stderr)
-
 
 tests = {}
 
@@ -283,6 +291,92 @@ def gen_queries(n:int, s:Schema, table_name:str):
       select.format(table_name, search_value)
     ) for search_value in search_values
   )
+def gen_bm_queries(n:int, s:Schema, qfname:str, table_name:str):
+  search_value = randint(0,2048+n)
+  with open(qfname, "w") as f:
+    # compute key values
+    recs_per_page = (BLOCK_SIZE-PAGE_HEADER_SIZE)// s.len
+    n_pages = ceil(s.n_records/recs_per_page)
+
+    slct = 'select * from {} where val = {};\n'
+
+    # very first
+    search_value = s.history[0]['val']
+    f.write(slct.format(table_name, search_value))
+
+    # very last
+    search_value = s.last()['val']
+    f.write(slct.format(table_name, search_value))
+
+    # last of first page
+    search_value = s.history[recs_per_page-1]['val']
+    f.write(slct.format(table_name, search_value))
+
+    # first of last page
+    search_value = s.history[(n_pages-1)*recs_per_page]['val']
+    f.write(slct.format(table_name, search_value))
+
+    pagenums = []
+    for i in range(nrand):
+      n = randint(1,n_pages-2)
+      while n in pagenums:
+        n = randint(1,n_pages-2)
+      pagenums.append(n)
+    pagenums.sort()
+
+    # first of random pages
+    search_values = [s.history[p_index*recs_per_page]['val'] for p_index in pagenums]
+    for search_value in search_values:
+      f.write(slct.format(table_name, search_value))
+
+    pagenums = []
+    for i in range(nrand):
+      n = randint(1,n_pages-2)
+      while n in pagenums:
+        n = randint(1,n_pages-2)
+      pagenums.append(n)  
+    pagenums.sort()
+
+    # last of random pages 
+    search_values = [s.history[(p_index+1)*recs_per_page-1]['val'] for p_index in pagenums]
+    for search_value in search_values:
+      f.write(slct.format(table_name, search_value))
+      
+    
+
+    indeces = []
+    for i in range(nrand):
+      n = randint(0,s.n_records-1)
+      while n in indeces:
+        randint(0,s.n_records-1)
+      indeces.append(n)
+    indeces.sort()
+
+    # completely random present
+    search_values = [s.history[index]['val'] for index in indeces]
+    for search_value in search_values:
+      f.write(slct.format(table_name, search_value))
+
+    # reference values
+    smallest = s.history[0]['val']
+    largest = s.last()['val']
+    present = s.all_prev('val')
+
+    search_values = []
+    for i in range(nrand):
+      value = randint(smallest,largest)
+      while value in present:
+        value = randint(s.history[0]['val'],s.last()['val'])
+      search_values.append(value)
+    search_values.sort()
+
+    # nonpresent
+    for search_value in search_values:
+      f.write(slct.format(table_name, search_value))
+
+    f.write('show pager\n')
+    f.write('quit')
+    
 
 total = 0
 successes = 0
@@ -317,8 +411,34 @@ def run_queries():
   s = "well done!" if total == successes else "too bad..."
   if not SUPPRESS: print("Passed {}/{} tests,".format(successes,total), s)
 
-def cleanup(fname, tname):
-  remove(fname)
+def run_benchmark(gfname, qfname, tname):
+  with open('bout', 'w+') as bout:
+    with open('lout', 'w+') as lout:
+      try:
+        bout.write(run(['./run_front', '-n', '-by', '-c{}'.format(qfname)], text=True, stderr=PIPE, ).stderr)
+        lout.write(run(['./run_front', '-n', '-c{}'.format(qfname)], text=True, stderr=PIPE, ).stderr)
+      except UnicodeDecodeError:
+        print('error decoding')
+        cleanup((gfname, qfname, 'bout', 'lout'), tname)
+        exit(1)
+      bout.seek(0)
+      lout.seek(0)
+      
+      bres = bout.readlines().pop().split().pop().split('/')
+      lres = lout.readlines().pop().split().pop().split('/')
+
+      print('=======================================')
+      print('\tseeks\treads\twrites\tIO')
+      print('binary\t{}'.format(',\t'.join(bres)))
+      print('linear\t{}'.format(',\t'.join(lres)))
+      print('=======================================')
+
+def cleanup(fnames, tname):
+  for fname in fnames:
+    try:
+      remove(fname)
+    except FileNotFoundError:
+      continue
   run(['./run_front', '-n'], text=True, input="drop table {};\nquit".format(tname), )
   pass
 
@@ -339,15 +459,18 @@ def superrandom():
 if __name__ == '__main__':
   # get number of entries to create from argv
   i = 1
-  while argv[i].startswith('--'):
-    match argv[i][2:]:
-      case 'suppress':
-        SUPPRESS = True
-      case 'benchmark':
-        BENCHMARK = True
-      case 'superrandom':
-        superrandom()
-    i+=1
+  try:
+    while argv[i].startswith('--'):
+      match argv[i][2:]:
+        case 'suppress':
+          SUPPRESS = True
+        case 'benchmark':
+          BENCHMARK = True
+        case 'superrandom':
+          superrandom()
+      i+=1
+  except IndexError:
+    pass
   try:
     n:int = int(argv[i])
   except IndexError:
@@ -356,6 +479,7 @@ if __name__ == '__main__':
     print(argv[i],'is not an integer')
     exit(-1)
 
+
   if n <= 0:
     print('n must be greater than 0, got', n)
     exit(-1)
@@ -363,7 +487,7 @@ if __name__ == '__main__':
   try:
     nrand = int(argv[i+1])
   except IndexError:
-    pass
+    nrand = 5
 
   # generate table schema to create
    # select a random set of field names
@@ -375,17 +499,32 @@ if __name__ == '__main__':
   attributes['val']['init'] = randint(0,n)
   s = Schema(attributes)
 
-  fname = 'generate_table.sql'
+  gfname = 'generate_table.sql'
+  qfname = 'run_queries.sql'
   tname = 'IntField'
-  gen_table(n, s, fname, tname)
+
+  try:
+    if tname in run(['./run_front', '-n'], text=True, input="show database\nquit", stderr=PIPE).stderr:
+      run(['./run_front', '-n'], input="drop table {}\nquit".format(tname).encode('utf-8'), stderr=PIPE)
+  except UnicodeDecodeError:
+    print('error decoding')
+    cleanup((gfname, qfname), tname)
+    exit(1)
   
 
-  gen_queries(n, s, tname)
+  gen_table(n, s, gfname, tname)
 
-  run_queries()
+  if BENCHMARK:
+    gen_bm_queries(n, s, qfname, tname)
+
+    run_benchmark(gfname, qfname, tname)
+  else:
+    gen_queries(n, s, qfname, tname)
+
+    run_queries(qfname)
   #sleep(5)
 
-  cleanup(fname, tname)
+  cleanup((gfname, qfname, 'bout', 'lout'), tname)
 
   if successes == total:
     exit(0)
