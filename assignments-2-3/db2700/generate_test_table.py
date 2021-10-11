@@ -2,7 +2,7 @@ from math import ceil, sqrt
 from os import remove
 from time import sleep
 from subprocess import PIPE, TimeoutExpired, run
-from sys import argv, exit, stderr
+from sys import argv, exit
 from random import randint, choices, sample
 from string import ascii_lowercase
 from typing import Generator, Iterable
@@ -12,7 +12,7 @@ from cfg import BFNAME, FNAMES, GFNAME, LFNAME, QFNAME, T_NAME
 SUPPRESS=False
 BENCHMARK=False
 DEBUG=False
-
+SIMPLE=False
 
 ids:list[int] = []
 
@@ -448,6 +448,58 @@ def cleanup():
   run(['./run_front', '-n'], text=True, input="drop table {};\nquit".format(T_NAME), )
   pass
 
+simple_query = None
+
+def gen_simple_query(s:Schema):
+  index = randint(0,s.n_records-1)
+  val = s.history[index]['val']
+  global simple_query
+  simple_query = 'select * from {} where val = {};\nquit'.format(T_NAME, val)
+  return val
+
+def run_simple_query(val):
+  print('== Simple query')
+  print('Searching for value: {}'.format(val))
+  bres = run(['./run_front', '-n', '-by'], text=True, input=simple_query, stderr=PIPE).stderr
+  lres = run(['./run_front', '-n'], text=True, input=simple_query, stderr=PIPE).stderr
+  if (lres == bres):
+    print('\tpassed')
+  else:
+    print('\tfailed')
+    print('expected:')
+    print(lres)
+    print('got:')
+    print(bres)
+
+def gen_simple_bm_query(s:Schema):
+  index = randint(0,s.n_records-1)
+  val = s.history[index]['val']
+  global simple_query
+  simple_query = 'select * from {} where val = {};\nshow pager\nquit'.format(T_NAME, val)
+  return val
+
+def run_simple_benchmark():
+  with open(BFNAME, 'w+') as bout:
+    with open(LFNAME, 'w+') as lout:
+      try:
+        bout.write(run(['./run_front', '-n', '-by'], text=True, input=simple_query, stderr=PIPE, ).stderr)
+        lout.write(run(['./run_front', '-n'], text=True, input=simple_query, stderr=PIPE, ).stderr)
+      except UnicodeDecodeError:
+        print('error decoding')
+        cleanup()
+        exit(1)
+      bout.seek(0)
+      lout.seek(0)
+      bres = bout.readlines().pop().split().pop().split('/')
+      lres = lout.readlines().pop().split().pop().split('/')
+
+      print('=======================================')
+      print('\tseeks\treads\twrites\tIO')
+      print('binary\t{}'.format(',\t'.join(bres)))
+      print('linear\t{}'.format(',\t'.join(lres)))
+      print('=======================================')
+
+
 def superrandom(times):
   successes = 0
   for i in range(times):
@@ -484,14 +536,16 @@ def print_info():
   print('Usage: {{python}} {} [flags] [N [np [n]]]'.format(argv[0]))
   print('   or: {{python}} {} --superrandom [times]'.format(argv[0]))
   print('Runs randomised queries on a randomised table of N entries (default to 1024).')
-  print('  np denotes the number of random pages (default 5) to test')
-  print('  n denotes the number of random values (default 10) to search from in the table. Will search for n present and n nonpresent values.')
+  print(' - np denotes the number of random pages (default 5) to test')
+  print(' - n denotes the number of random values (default 10) to search from in the table. Will search for n present and n nonpresent values.')
   print(' flags:')
-  print('   --help\t\tprint this and exit')
-  print('   --benchmark\t\trun benchmark of both linear and binary search, results are printed to stdout')
-  print('   --superrandom\truns this program `times` times (default to 5), counting the number of complete successes')
-  print('                \tNOTE: superrandom mode is incredibly slow')
-  print('   --suppress\t\trun without printing results')
+  print('   --help         print this and exit')
+  print('   --benchmark    run benchmark of both linear and binary search, results are printed to stdout')
+  print('   --simple       tells the program to only perform one single query on the database')
+  print('                  NOTE: very boring')
+  print('   --superrandom  runs this program `times` times (default to 5), counting the number of complete successes')
+  print('                  NOTE: superrandom mode is incredibly slow')
+  print('   --suppress     run without printing results')
   exit(0)
 if __name__ == '__main__':
   try:
@@ -506,6 +560,8 @@ if __name__ == '__main__':
             SUPPRESS = True
           case 'benchmark':
             BENCHMARK = True
+          case 'simple':
+            SIMPLE = True
           case 'debug':
             DEBUG=True
           case 'superrandom':
@@ -532,26 +588,28 @@ if __name__ == '__main__':
       print('N must be greater than 0, got', N)
       exit(-1)
     
-    try:
-      np = int(argv[i])
-    except IndexError:
-      print('`np` omitted, defaulting to 3')
-      np = 3
-    except ValueError:
-      print(argv[i],'is not an integer')
-      exit(-1)
-    finally:
-      i+=1
+    if not SIMPLE:
+      try:
+        np = int(argv[i])
+      except IndexError:
+        print('`np` omitted, defaulting to 3')
+        np = 3
+      except ValueError:
+        print(argv[i],'is not an integer')
+        exit(-1)
+      finally:
+        i+=1
 
 
-    try:
-      n = int(argv[i])
-    except IndexError:
-      print('`n` omitted, defaulting to 10')
-      n = 10
-    except ValueError:
-      print(argv[i],'is not an integer')
-      exit(-1)
+    if not SIMPLE:
+      try:
+        n = int(argv[i])
+      except IndexError:
+        print('`n` omitted, defaulting to 10')
+        n = 10
+      except ValueError:
+        print(argv[i],'is not an integer')
+        exit(-1)
     
 
     # generate table schema to create
@@ -577,13 +635,25 @@ if __name__ == '__main__':
     gen_table(N, s)
 
     if BENCHMARK:
-      gen_bm_queries(N, s)
+      if SIMPLE:
+        gen_simple_bm_query(s)
 
-      run_benchmark()
+        run_simple_benchmark()
+      else:
+        gen_bm_queries(N, s)
+
+        run_benchmark()
+
     else:
-      gen_queries(N, np, n, s)
+      if SIMPLE:
+        val = gen_simple_query(s)
 
-      run_queries()
+        run_simple_query(val)
+
+      else:
+        gen_queries(N, np, n, s)
+
+        run_queries()
     #sleep(5)
 
     cleanup()
@@ -596,4 +666,5 @@ if __name__ == '__main__':
     #print_tests()
     #print(res.stdout)
   finally:
-    cleanup()
+    #cleanup()
+    pass

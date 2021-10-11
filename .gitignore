@@ -14,3 +14,4 @@ assignments-2-3/db2700/src/Doxyfile
 assignments-2-3/db2700/tests
 db2700/__pycache__
 assignments-2-3/docs/specification-assignment2.pdf
+*.tex
