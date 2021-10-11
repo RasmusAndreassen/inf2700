@@ -354,7 +354,7 @@ def gen_bm_queries(N:int, s:Schema):
     for i in range(n):
       index = randint(0,s.n_records-1)
       while index in indeces:
-        randint(0,s.n_records-1)
+        index = randint(0,s.n_records-1)
       indeces.append(index)
     indeces.sort()
 
