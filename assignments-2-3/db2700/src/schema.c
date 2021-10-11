@@ -323,7 +323,7 @@ int open_db(void) {
   return 1;
 }
 
-/** @b open_db
+/** @b close_db
  * 
  * writes the table descriptors to drive, and terminates pager
  */
@@ -809,20 +809,17 @@ static int find_record_int_val(record r, schema_p s, int offset,
 }
 
 typedef struct reference_of_page_extremities{
-  int blknum;
+  page_p pg;
   int high;
   int low;
-} ref_page_t;
+} pageref_t;
 
-static enum {
-  DONE = 0,
-  CONTINUE
-};
+
 
 static int lfind_record_int_val(record r, schema_p s, int offset, int val)
 {
   page_p pg = get_page_for_next_record(s);
-  if (!pg) return DONE;
+  if (!pg) return 0;
   int pos, rec_val;
   for (; pg; pg = get_page_for_next_record(s)) {
     pos = page_current_pos(pg);
@@ -830,73 +827,238 @@ static int lfind_record_int_val(record r, schema_p s, int offset, int val)
     if (rec_val == val) {
       page_set_current_pos(pg, pos);
       get_page_record(pg, r, s);
-      return CONTINUE;
+      return 1;
     }
     else
-      return DONE;
+      return 0;
   }
-  return DONE;
+  return 0;
 }
 
-static int bfind_page_record_int_val(schema_p s, ref_page_t page, int offset, int val)
+// this is a shorthand for taking the average index of two records,
+// with their positions as arguments
+#define I(pos)      (pos-20)/s->len
+#define P(ind)      ind*s->len+20
+#define AVG(x1,x2)  (x1+x2)/2
+#define pAVG(p1,p2) P(AVG(I(p1),I(p2)))
+
+static int bfind_page_first_int_val(schema_p s, pageref_t ref, int offset, int val)
 {
-  int rec_val, pos, res;
-  page_p pg = get_page(s->name, page.blknum);
-  while (pos != page.low) {
-    pos = page.high + page.low / 2;
-    rec_val = page_get_int_at(pg, pos+offset);
+  int rec_val, pos=0;
+
+  rec_val = page_get_int_at(ref.pg, ref.high+offset);
+
+  if (rec_val == val) {
+    rec_val = page_get_int_at(ref.pg, ref.high-s->len+offset);
+    if (rec_val != val)
+      return ref.high;
+  }
+
+  while (ref.high != ref.low) {
+    pos = pAVG(ref.low,ref.high);
+    if (pos == ref.low)
+      break;
+    rec_val = page_get_int_at(ref.pg, pos+offset);
     
     if (rec_val == val) {
-      rec_val = page_get_int_at(pg, pos - s->len + offset);
-      if (rec_val != val)
+      if (pos > page_seek(ref.pg, P_BEG, 0)) {
+        rec_val = page_get_int_at(ref.pg, pos - s->len + offset);
+        if (rec_val != val)
+          return pos;
+        else {
+          ref.high = pos;
+          continue;
+        }
+      } else 
         return pos;
-      else {
-        page.high = pos - s->len;
-        continue;
-      }
     } else if (rec_val < val) {
-      page.low = pos - s->len;
+      ref.low = pos;
       continue;
     } else if (rec_val > val) {
-      page.high = pos - s->len;
+      ref.high = pos;
       continue;
     }
   }
 
   return -1;
 }
-
+// TODO
 static int bfind_first_int_val(schema_p s, int offset, int val)
 {
 
-  ref_page_t high, low;
-  page_p pg;
-  int pos, n_records, rec_val;
+  int pos, cpos, rec_val, high, low, mid;
+  page_p pg, cpg;
+  pageref_t ref;
 
-  // first check first block
-
+  // first check first page
+  ref.pg =
   pg = get_page(s->name, 0);
   if (!pg)
-    return 0;
-  
-  low.low = page_seek(pg, P_BEG, offset) - offset;
-  rec_val = page_get_int(pg);
+    goto not;
 
-  if (rec_val > val) { // when the reference value is lower than the lowest value
-    return 0;
-  } else if (rec_val == val) { // found at beginning of table
-    page_seek(pg, P_BEG, 0);
-    return 1;
+  ref.low =
+  pos = page_seek(pg, P_BEG, 0);
+  rec_val = page_get_int_at(pg, pos + offset);
+
+  if (val < rec_val) { // when the reference value is lower than the lowest value
+    goto not;
+  } else if (rec_val == val) { // will be beginning of linear result
+    goto found;
   }
 
-  low.high = page_seek(pg, P_END, -s->len);
-  rec_val = page_get_int_at(pg, low.high);
+  ref.high =
+  pos = page_seek(pg, P_END, -s->len);
+  low = page_block_nr(pg);
+  rec_val = page_get_int_at(pg, pos + offset);
 
-  pg = get_page_for_append(s->name); // get last entry
+  if (val <= rec_val) { // reference value is within first page
+    pos = bfind_page_first_int_val(s, ref, offset, val);
+    if (pos < 0)
+      goto not;
+    goto found;
+  }
 
+  // second check last page
 
+  unpin(pg); // release page, is no longer necessary
+  ref.pg =
+  pg = get_page(s->name, -1); // get last page
+  high = page_block_nr(pg);
+  if (high == low)
+    goto not;
+
+  ref.high =
+  pos = page_seek(pg, P_END, -s->len);
+  rec_val = page_get_int_at(pg, pos + offset);
+
+  if (val > rec_val) { // reference larger than largest value
+    goto not;
+  } else if (val == rec_val) { // needs extra check, because this would otherwise be the end of a linear search
+    
+    if (pos > page_seek(pg, P_BEG, 0)) {
+      if(val != page_get_int_at(pg, pos - s->len + offset)) {
+        goto found;
+      }
+    } else {
+      cpg = get_page(s->name, page_block_nr(pg));
+      cpos = page_seek(cpg, P_END, -s->len);
+      rec_val = page_get_int_at(cpg, cpos+offset);
+
+      if (rec_val != val) {
+        goto found;
+      } else {
+        unpin(pg);
+        high--;
+        ref.pg =
+        pg = cpg;
+        ref.high = cpos;
+        ref.low =
+        pos = page_seek(cpg, P_BEG, 0);
+        rec_val = page_get_int_at(cpg, cpos+offset);
+        if (rec_val != val) {
+          pos = bfind_page_first_int_val(s, ref, offset, val);
+          goto found;
+        } else {
+          goto loop; 
+          /** this is the case where the highest value of last page is
+           * @em also lowest value of last page, so no need to check again
+           */
+        }
+      }
+    }
+    
+  }
+
+  ref.low = 
+  pos = page_seek(pg, P_BEG, 0);
+  rec_val = page_get_int_at(pg, pos + offset);
+  
+  if (val > rec_val) {
+    pos = bfind_page_first_int_val(s, ref, offset, val);
+    if (pos < 0)
+      goto not;
+    s->tbl->current_pg = pg;
+    page_set_current_pos(pg, pos);
+    return 1;
+  } else if (val == rec_val) {
+    cpg = get_page(s->name, high-1);
+    cpos = page_seek(cpg, P_END, -s->len);
+    
+    if (val != page_get_int_at(cpg, cpos+offset))
+      goto found;
+    else {
+      unpin(pg);
+      pg = cpg;
+      ref.pg = pg;
+      ref.high = cpos;
+      ref.low =
+      pos = page_seek(cpg, P_BEG, 0);
+
+      if (val != page_get_int_at(cpg, pos+offset)) {
+        pos = bfind_page_first_int_val(s, ref, offset, val);
+      
+        goto found;
+      }
+        // if searches to the previous page were to continue after this,
+        // the algorithm would likely end up performing a linear search.
+    }
+  }
+
+loop:
+
+  while (high != low){
+    unpin(pg);
+    mid = (high+low)/2;
+    ref.pg =
+    pg = get_page(s->name, mid);
+
+    ref.low =
+    pos = page_seek(pg, P_BEG, 0);
+    rec_val = page_get_int_at(pg, pos + offset);
+
+    if (val < rec_val) {
+      high = page_block_nr(pg);
+      continue;
+    }
+    if (val == rec_val) { // match at bottom of page
+      cpg = get_page(s->name, mid-1);
+      cpos = page_seek(cpg, P_END, -s->len);
+      if (val != page_get_int_at(cpg, cpos+offset))
+        goto found;
+      else {
+        high = mid;
+        continue;
+      }
+    }
+
+    ref.high =
+    pos = page_seek(pg, P_END, -s->len);
+    rec_val = page_get_int_at(pg, pos + offset);
+
+    if (val > rec_val) {
+      if (low == page_block_nr(pg))
+        goto not;
+      low = page_block_nr(pg);
+      continue;
+    }
+
+    pos = bfind_page_first_int_val(s, ref, offset, val);
+    if (pos < 0)
+      goto not;
+    goto found;
+
+  }
+
+not:
 
   return 0;
+
+found:
+
+  s->tbl->current_pg = pg;
+  page_set_current_pos(pg, pos);
+  return 1;
+
 }
 
 /** @b put_page_record
@@ -1079,10 +1241,10 @@ tbl_p table_search(tbl_p t, char const* attr, char const* op, int val, int b_sea
   //TODO: replace this too
   set_tbl_position(t, TBL_BEG);
   if (b_search && cmp_op == int_eq){
-    
-  while (lfind_record_int_val(rec, s, f->offset, val)) {
-
-  }
+    if (bfind_first_int_val(s, f->offset, val))
+    while (lfind_record_int_val(rec, s, f->offset, val)) {
+      append_record(rec, res_sch);
+    }
   } else {
     while (find_record_int_val(rec, s, f->offset, cmp_op, val)) {
       append_record(rec, res_sch);

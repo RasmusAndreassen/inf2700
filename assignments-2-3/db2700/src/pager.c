@@ -916,16 +916,16 @@ int page_seek(page_p p, int whence, int offset) {
   {
   case P_BEG:
     if (offset < 0 || PAGE_HEADER_SIZE + offset > p->free_pos) {
-      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
-      return -1;
+      put_msg(FATAL, "page_seek: offset %d out of bounds.\nWould have ended up at pos %d (BEG)\n", offset, p->free_pos+offset);
+      exit(EXIT_FAILURE);
     }
     p->current_pos = PAGE_HEADER_SIZE + offset;
   
   break;
   case P_NOW:
     if (p->current_pos + offset < PAGE_HEADER_SIZE || p->current_pos + offset >= p->free_pos) {
-      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
-      return -1;
+      put_msg(FATAL, "page_seek: offset %d out of bounds.\n", offset);
+      exit(EXIT_FAILURE);
     }
 
     p->current_pos += offset;
@@ -933,8 +933,8 @@ int page_seek(page_p p, int whence, int offset) {
   break;
   case P_END:
     if (p->free_pos + offset < PAGE_HEADER_SIZE || offset > 0) {
-      put_msg(ERROR, "page_seek: offset %d out of bounds.\n", offset);
-      return -1;
+      put_msg(FATAL, "page_seek: offset %d out of bounds.\nWould have ended up at pos %d (END)\n", offset, p->free_pos+offset);
+      exit(EXIT_FAILURE);
     }
 
     p->current_pos = p->free_pos + offset;
@@ -942,7 +942,7 @@ int page_seek(page_p p, int whence, int offset) {
   break;
   default:
     put_msg(ERROR, "page_seek: reached invalid point.\n");
-    return -1;
+    exit(EXIT_FAILURE);
   }
 
   return p->current_pos;

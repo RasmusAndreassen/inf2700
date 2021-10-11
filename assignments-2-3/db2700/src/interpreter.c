@@ -20,6 +20,7 @@
 
 static const char* const t_database = "database";
 static const char* const t_show = "show";
+static const char* const t_pager = "pager";
 static const char* const t_print = "print";
 static const char* const t_create = "create";
 static const char* const t_drop = "drop";
@@ -35,6 +36,7 @@ static const char* const t_int = "int";
 static FILE *in_s; /* input stream, default to stdin */
 
 int b_search = 0;
+int no_interface = 0;
 
 static int init_with_options (int argc, char* argv[]) {
   char cmd_file[MAX_LINE_WIDTH] = "";
@@ -43,7 +45,7 @@ static int init_with_options (int argc, char* argv[]) {
 
   msglevel = INFO;
 
-  while ((c = getopt(argc, argv, "hm:d:c:b:")) != -1)
+  while ((c = getopt(argc, argv, "hnm:b:d:c:")) != -1)
     switch (c) {
     case 'h':
       printf("Usage: runtest [switches]\n");
@@ -77,6 +79,10 @@ static int init_with_options (int argc, char* argv[]) {
         printf("Option -b requires arguments yes/no or true/false\n");
         abort();
       }
+      break;
+    case 'n':
+      no_interface = 1;
+      break;
     case '?':
       if (optopt == 'm' || optopt == 'd' || optopt == 'c' || optopt == 'b')
         printf("Option -%c requires an argument.\n", optopt);
@@ -108,7 +114,7 @@ static int init_with_options (int argc, char* argv[]) {
     }
   }
 
-  if (in_s == stdin) {
+  if (in_s == stdin && !no_interface) {
     printf("Welcome to db2700 session\n");
     printf("  - Enter \"help\" for instructions\n");
     printf("  - Enter \"quit\" to leave the session\n");
@@ -260,17 +266,22 @@ static void quit() {
   if (in_s != stdin) fclose(in_s);
 }
 
-static void show_database() {
+static void show() {
   char token[MAX_TOKEN_LEN];
   if (!next_token(token)) {
     put_msg(ERROR, "Show what?\n");
     return;
   }
-  if (strcmp(token, t_database) != 0) {
+  if (strcmp(token, t_database) == 0) {
+    put_db_info(FORCE);
+  }
+  else
+  if (strcmp(token, t_pager) == 0) {
+    put_pager_profiler_info(FORCE);
+  } else {
     put_msg(ERROR, "Cannot show \"%s\".\n", token);
     return;
   }
-  put_db_info(FORCE);
 }
 
 static void print_str() {
@@ -626,6 +637,7 @@ static void select_rows() {
   release_select_desc(slct);
 }
 
+
 void interpret(int argc, char* argv[]) {
   if (!init_with_options(argc, argv))
     exit(EXIT_FAILURE);
@@ -633,12 +645,9 @@ void interpret(int argc, char* argv[]) {
   char token[MAX_TOKEN_LEN];
 
   while (!feof(in_s)) {
-    if (in_s == stdin)
+    if (in_s == stdin && !no_interface)
       printf("db2700> ");
     if (!next_token(token)) {
-      if (feof(in_s)) // need to check for feof, because next_token doesn't skip whitespace after a token
-        return;
-
       put_msg(ERROR, "Getting input failed\n");
       exit(EXIT_FAILURE);
     }
@@ -649,7 +658,7 @@ void interpret(int argc, char* argv[]) {
     if (strcmp(token, t_help) == 0)
       { show_help_info(); continue; }
     if (strcmp(token, t_show) == 0)
-      { show_database(); continue; }
+      { show(); continue; }
     if (strcmp(token, t_print) == 0)
       { print_str(); continue; }
     if (strcmp(token, t_create) == 0)
