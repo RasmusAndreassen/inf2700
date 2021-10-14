@@ -13,6 +13,7 @@ SUPPRESS=False
 BENCHMARK=False
 DEBUG=False
 SIMPLE=False
+CLEANUP=True
 
 ids:list[int] = []
 
@@ -263,7 +264,6 @@ def gen_queries(N:int, np:int, n:int, s:Schema):
   )
 
   indeces = []
-  print(s.n_records-1)
   for i in range(n):
     index = randint(0,s.n_records-1)
     while index in indeces:
@@ -323,10 +323,13 @@ def gen_bm_queries(N:int, s:Schema):
     f.write(slct.format(T_NAME, search_value))
 
     pagenums = []
-    for i in range(n):
+    for i in range(np):
       pagenum = randint(1,n_pages-2)
-      while pagenum in pagenums:
-        pagenum = randint(1,n_pages-2)
+      if pagenum in pagenums:
+        if len(pagenums) == n_pages-2:
+          break
+        while pagenum in pagenums:
+          pagenum = randint(1,n_pages-2)
       pagenums.append(pagenum)
     pagenums.sort()
 
@@ -336,10 +339,13 @@ def gen_bm_queries(N:int, s:Schema):
       f.write(slct.format(T_NAME, search_value))
 
     pagenums = []
-    for i in range(n):
+    for i in range(np):
       pagenum = randint(1,n_pages-2)
-      while pagenum in pagenums:
-        pagenum = randint(1,n_pages-2)
+      if pagenum in pagenums:
+        if len(pagenums) == n_pages-2:
+          break
+        while pagenum in pagenums:
+          pagenum = randint(1,n_pages-2)
       pagenums.append(pagenum)  
     pagenums.sort()
 
@@ -425,7 +431,7 @@ def run_benchmark():
         lout.write(run(['./run_front', '-n', '-c{}'.format(QFNAME)], text=True, stderr=PIPE, ).stderr)
       except UnicodeDecodeError:
         print('error decoding')
-        cleanup()
+        if CLEANUP: cleanup()
         exit(1)
       bout.seek(0)
       lout.seek(0)
@@ -486,7 +492,7 @@ def run_simple_benchmark():
         lout.write(run(['./run_front', '-n'], text=True, input=simple_query, stderr=PIPE, ).stderr)
       except UnicodeDecodeError:
         print('error decoding')
-        cleanup()
+        if CLEANUP: cleanup()
         exit(1)
       bout.seek(0)
       lout.seek(0)
@@ -517,18 +523,18 @@ def superrandom(times):
     res:int = run(['python3.10', __file__, str(N), str(np), str(n)], text=True, stdout=PIPE).returncode
     if res == 0:
       print('passed')
-      cleanup()
+      if CLEANUP: cleanup()
       successes+=1
     else:
       print('failed')
-      cleanup()
+      if CLEANUP: cleanup()
     # except TimeoutExpired:
     #   print('timed out')
     #   times-=1
     #   cleanup()
     #   continue
 
-  cleanup()
+  if CLEANUP: cleanup()
   print('Succeeded {} times out of {}'.format(successes, times))
   exit(0)
 
@@ -543,9 +549,11 @@ def print_info():
   print('   --benchmark    run benchmark of both linear and binary search, results are printed to stdout')
   print('   --simple       tells the program to only perform one single query on the database')
   print('                  NOTE: very boring')
+  print('   --suppress     run without printing results')
+  print('   --nocleanup    don\'t run cleanup after the program terminates, useful for examining behaviour or debugging')
+  print('   --cleanup      only run cleanup, don\'t do anything else')
   print('   --superrandom  runs this program `times` times (default to 5), counting the number of complete successes')
   print('                  NOTE: superrandom mode is incredibly slow')
-  print('   --suppress     run without printing results')
   exit(0)
 if __name__ == '__main__':
   try:
@@ -564,6 +572,11 @@ if __name__ == '__main__':
             SIMPLE = True
           case 'debug':
             DEBUG=True
+          case 'cleanup':
+            cleanup()
+            exit(0)
+          case 'nocleanup':
+            CLEANUP=False
           case 'superrandom':
             try:
               superrandom(int(argv[i+1]))
@@ -628,7 +641,7 @@ if __name__ == '__main__':
         run(['./run_front', '-n'], input="drop table {}\nquit".format(T_NAME).encode('utf-8'), stderr=PIPE)
     except UnicodeDecodeError:
       print('error decoding')
-      cleanup()
+      if CLEANUP: cleanup()
       exit(1)
     
 
@@ -656,7 +669,7 @@ if __name__ == '__main__':
         run_queries()
     #sleep(5)
 
-    cleanup()
+    if CLEANUP: cleanup()
 
     if successes == total:
       exit(0)
@@ -666,5 +679,4 @@ if __name__ == '__main__':
     #print_tests()
     #print(res.stdout)
   finally:
-    #cleanup()
-    pass
+    if CLEANUP: cleanup()

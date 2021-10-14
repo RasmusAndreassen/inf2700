@@ -1,5 +1,5 @@
-GFNAME = 'generate_table.sql'
-QFNAME = 'run_queries.sql'
+GFNAME = 'generate_table.dbcmd'
+QFNAME = 'run_queries.dbcmd'
 BFNAME = 'bout'
 LFNAME = 'lout'
 T_NAME = 'IntField'

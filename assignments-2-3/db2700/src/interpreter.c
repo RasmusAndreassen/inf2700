@@ -52,7 +52,9 @@ static int init_with_options (int argc, char* argv[]) {
       printf("\t-h           help, print this message\n");
       printf("\t-m [fewid]   msg level [fatal,error,warn,info,debug]\n");
       printf("\t-d db_dir    default to ./tests/testfront\n");
-      printf("\t-c cmd file  eg. ./tests/testcmd.dbcmd, default to stdin\n");
+      printf("\t-c cmd_file  eg. ./tests/testcmd.dbcmd, default to stdin\n");
+      printf("\t-b yes/no    use the binary search algorithm or not\n");
+      printf("\t-n           suppress printing 'db2700>'for each line in stdin\n");
       exit(0);
     case 'm':
       switch (optarg[0]) {

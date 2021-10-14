@@ -436,7 +436,7 @@ static schema_p copy_schema(schema_p s, char const* dest_name) {
 
 /** @b copy_schema
  * 
- * returns the the field of 
+ * returns the named field of schema
  * 
  * @param s      source to search
  * @param name   name of new schema
@@ -445,6 +445,19 @@ static field_desc_p get_field(schema_p s, char const* name) {
   for (field_desc_p f = s->first; f; f = f->next)
     if (strcmp(f->name, name) == 0) return f;
   return 0;
+}
+
+/** @b get_field_name_from_offset
+ * 
+ * returns the name of the field in schema s with the given offset
+ * 
+ * @param s       schema to search
+ * @param offset  offset to search for
+ */
+static const char *const get_field_name_from_offset(schema_p s, int offset) {
+  for (field_desc_p f = s->first; f; f = f->next)
+    if (f->offset == offset) return f->name;
+  return NULL;
 }
 
 /** @b tmp_schema_name
@@ -808,14 +821,6 @@ static int find_record_int_val(record r, schema_p s, int offset,
   return 0;
 }
 
-typedef struct reference_of_page_extremities{
-  page_p pg;
-  int high;
-  int low;
-} pageref_t;
-
-
-
 static int lfind_record_int_val(record r, schema_p s, int offset, int val)
 {
   page_p pg = get_page_for_next_record(s);
@@ -837,227 +842,386 @@ static int lfind_record_int_val(record r, schema_p s, int offset, int val)
 
 // this is a shorthand for taking the average index of two records,
 // with their positions as arguments
-#define I(pos)      (pos-20)/s->len
-#define P(ind)      ind*s->len+20
-#define AVG(x1,x2)  (x1+x2)/2
-#define pAVG(p1,p2) P(AVG(I(p1),I(p2)))
+#define I(pos)      (pos-PAGE_HEADER_SIZE)/s->len // < index given position
+#define P(ind)      ind*s->len+PAGE_HEADER_SIZE   // < position given index
+#define AVG(x1,x2)  (x1+x2)/2                     // < geometric mean of two numbers
+#define pAVG(p1,p2) P(AVG(I(p1),I(p2)))           // < the position of the index mean of two other positions
 
-static int bfind_page_first_int_val(schema_p s, pageref_t ref, int offset, int val)
+/** @b bfind_page_first_int_val
+ * 
+ * Searches for the first occurence of value val within the page, at the given offset.
+ * 
+ * returns the position if found, else -1
+ * 
+ * @param s       schema for reference
+ * @param pg      page to search
+ * @param offset  offset of value within record
+ * @param val     reference value
+ */
+static int bfind_page_first_int_val(schema_p s, page_p pg, int offset, int val)
 {
   int rec_val, pos=0;
 
-  rec_val = page_get_int_at(ref.pg, ref.high+offset);
+  int low  = page_seek(pg, P_BEG, 0),
+      high = page_seek(pg, P_END, -s->len);
 
-  if (rec_val == val) {
-    rec_val = page_get_int_at(ref.pg, ref.high-s->len+offset);
-    if (rec_val != val)
-      return ref.high;
-  }
+  int lowest = low;
 
-  while (ref.high != ref.low) {
-    pos = pAVG(ref.low,ref.high);
-    if (pos == ref.low)
+  while (high != low) { // at first iteration will never be true, since parent function covers the case of only one record
+    pos = pAVG(low,high);
+    if (pos == low)
       break;
-    rec_val = page_get_int_at(ref.pg, pos+offset);
+    rec_val = page_get_int_at(pg, pos+offset);
     
     if (rec_val == val) {
-      if (pos > page_seek(ref.pg, P_BEG, 0)) {
-        rec_val = page_get_int_at(ref.pg, pos - s->len + offset);
+      if (pos > lowest) {
+        rec_val = page_get_int_at(pg, pos - s->len + offset);
         if (rec_val != val)
           return pos;
         else {
-          ref.high = pos;
+          high = pos;
           continue;
         }
       } else 
         return pos;
     } else if (rec_val < val) {
-      ref.low = pos;
+      low = pos;
       continue;
     } else if (rec_val > val) {
-      ref.high = pos;
+      high = pos;
       continue;
     }
   }
 
   return -1;
 }
-// TODO
+
+typedef enum {
+  WITHIN = 0,
+  FIRST,
+  LAST,
+  BELOW,
+  ABOVE,
+} check_res;
+
+/** @b val_in_page_range
+ * Checks where the reference value would reside as compared to the
+ * extremities of the page.
+ * 
+ * @returns:
+ *  - FIRST:  value is found at the beginning of the page
+ *  - LAST:   value is found uniquely at the end of the page
+ *  - WITHIN: value is either between the first and last record values of the page,
+ *            or the value is found at the end of the page, but not uniquely
+ *  - BELOW:  value is less than the first record value
+ *  - ABOVE:  value is greater than the last record value
+ */
+static check_res val_in_page_range(schema_p s, page_p pg, int offset, int val)
+{
+  int first = page_seek(pg, P_BEG, offset),
+      last;
+  int rec_val = page_get_int(pg);
+
+  if (val < rec_val) {
+    return BELOW; // case value is below range
+  } else
+  if (val == rec_val) {
+    return FIRST; // case value is first in range
+  }
+
+  last = page_seek(pg, P_END, -s->len+offset);
+  if (last == first) {
+    return ABOVE; // case only one value
+  }
+
+  rec_val = page_get_int(pg);
+
+  if (val > rec_val) {
+    return ABOVE; // case value is above range
+  } else
+  if (val == rec_val) {
+    if (val != page_get_int_at(pg, last - s->len))
+      return LAST; // case value is last in range
+  }
+
+  return WITHIN; // otherwise is within range
+
+}
+
+/** @b bfind_first_int_val
+ * 
+ * Sets the current position of the table to the first record where the field at the
+ * given offset matches value val.
+ * If the value is not found, the page position remains unchanged.
+ * 
+ * Returns 0 upon failure, 1 upon success.
+ * 
+ * @param s       schema of table to search
+ * @param offset  offset field 
+ * @param val     reference value
+ */
 static int bfind_first_int_val(schema_p s, int offset, int val)
 {
 
-  int pos, cpos, rec_val, high, low, mid;
+  int pos, high, low, mid;
   page_p pg, cpg;
-  pageref_t ref;
+
+  const char *const field_name = get_field_name_from_offset(s, offset);
+  if (!field_name){
+    put_msg(ERROR, "bfind_first_int_val: Passed invalid offset: %d", offset);
+    exit(EXIT_FAILURE);
+  }
 
   // first check first page
-  ref.pg =
   pg = get_page(s->name, 0);
   if (!pg)
     goto not;
 
-  ref.low =
-  pos = page_seek(pg, P_BEG, 0);
-  rec_val = page_get_int_at(pg, pos + offset);
 
-  if (val < rec_val) { // when the reference value is lower than the lowest value
-    goto not;
-  } else if (rec_val == val) { // will be beginning of linear result
-    goto found;
-  }
+  switch (val_in_page_range(s, pg, offset, val))
+  {
+  case FIRST:
+    
+    goto first;
+  
+  break;
+  case LAST:
 
-  ref.high =
-  pos = page_seek(pg, P_END, -s->len);
-  low = page_block_nr(pg);
-  rec_val = page_get_int_at(pg, pos + offset);
+    goto last;
 
-  if (val <= rec_val) { // reference value is within first page
-    pos = bfind_page_first_int_val(s, ref, offset, val);
+  break;
+  case WITHIN:
+
+    pos = bfind_page_first_int_val(s, pg, offset, val);
     if (pos < 0)
       goto not;
-    goto found;
+    else
+      goto found;
+
+  break;
+  case BELOW: // below lowest value of table
+
+    goto not;
+
+  break;
+  case ABOVE:
+
+    // do nothing
+  
+  break;
   }
+
+  low = page_block_nr(pg);
+  unpin(pg); // release page, is no longer necessary
 
   // second check last page
-
-  unpin(pg); // release page, is no longer necessary
-  ref.pg =
   pg = get_page(s->name, -1); // get last page
   high = page_block_nr(pg);
-  if (high == low)
+  if (high == low) // only one page
     goto not;
 
-  ref.high =
-  pos = page_seek(pg, P_END, -s->len);
-  rec_val = page_get_int_at(pg, pos + offset);
 
-  if (val > rec_val) { // reference larger than largest value
-    goto not;
-  } else if (val == rec_val) { // needs extra check, because this would otherwise be the end of a linear search
-    
-    if (pos > page_seek(pg, P_BEG, 0)) {
-      if(val != page_get_int_at(pg, pos - s->len + offset)) {
-        goto found;
-      }
-    } else {
-      cpg = get_page(s->name, page_block_nr(pg));
-      cpos = page_seek(cpg, P_END, -s->len);
-      rec_val = page_get_int_at(cpg, cpos+offset);
+  switch (val_in_page_range(s, pg, offset, val)) {
+  case FIRST: // first value of last page, could mean a lot of things
 
-      if (rec_val != val) {
-        goto found;
-      } else {
-        unpin(pg);
-        high--;
-        ref.pg =
-        pg = cpg;
-        ref.high = cpos;
-        ref.low =
-        pos = page_seek(cpg, P_BEG, 0);
-        rec_val = page_get_int_at(cpg, cpos+offset);
-        if (rec_val != val) {
-          pos = bfind_page_first_int_val(s, ref, offset, val);
-          goto found;
-        } else {
-          goto loop; 
-          /** this is the case where the highest value of last page is
-           * @em also lowest value of last page, so no need to check again
-           */
-        }
-      }
+    if (high-1 == low){
+      page_seek(pg, P_BEG, 0);
+      s->tbl->current_pg = pg;
+      return 1;
     }
-    
-  }
 
-  ref.low = 
-  pos = page_seek(pg, P_BEG, 0);
-  rec_val = page_get_int_at(pg, pos + offset);
-  
-  if (val > rec_val) {
-    pos = bfind_page_first_int_val(s, ref, offset, val);
-    if (pos < 0)
-      goto not;
-    s->tbl->current_pg = pg;
-    page_set_current_pos(pg, pos);
-    return 1;
-  } else if (val == rec_val) {
     cpg = get_page(s->name, high-1);
-    cpos = page_seek(cpg, P_END, -s->len);
-    
-    if (val != page_get_int_at(cpg, cpos+offset))
-      goto found;
-    else {
+
+    switch (val_in_page_range(s, cpg, offset, val))
+    {
+    case FIRST:
+
       unpin(pg);
       pg = cpg;
-      ref.pg = pg;
-      ref.high = cpos;
-      ref.low =
-      pos = page_seek(cpg, P_BEG, 0);
+      high--;
 
-      if (val != page_get_int_at(cpg, pos+offset)) {
-        pos = bfind_page_first_int_val(s, ref, offset, val);
+    break;
+    case LAST:
       
-        goto found;
-      }
-        // if searches to the previous page were to continue after this,
-        // the algorithm would likely end up performing a linear search.
-    }
-  }
+      unpin(pg);
+      pg = cpg;
+      goto last;
+      
+    break;
+    case WITHIN:
 
-loop:
+      unpin(pg);
+      pg = cpg;
+
+      pos = bfind_page_first_int_val(s, pg, offset, val);
+      if (pos < 0)
+        goto not;
+      else
+        goto found;
+
+    break;
+    case ABOVE:
+
+      unpin(cpg);
+      goto first;
+    
+    break;
+    case BELOW:
+
+      // this point should never be reached
+      put_msg(ERROR, "Field %s is not properly sorted, found %d before %d\n",
+                      field_name,
+                      page_get_int_at(cpg, page_seek(cpg, P_BEG, offset)),
+                      page_get_int_at(cpg, page_seek(pg, P_BEG, offset))
+              );
+      put_msg(ERROR, "Checking blocks:");
+      put_page_info(ERROR, cpg);
+      put_page_info(ERROR, pg);
+      put_schema_info(ERROR, s);
+      exit(EXIT_FAILURE);
+
+    break;
+    }
+
+  break;
+  case LAST:
+
+    page_seek(pg, P_END, -s->len);
+    s->tbl->current_pg = pg;
+    return 1;
+
+  break;
+  case WITHIN:
+
+    pos = bfind_page_first_int_val(s, pg, offset, val);
+    if (pos < 0)
+      goto not;
+    else
+      goto found;
+
+  break;
+  case ABOVE:
+
+    goto not;
+
+  break;
+  case BELOW:
+
+    // do nothing
+
+  break;
+  }
 
   while (high != low){
     unpin(pg);
     mid = (high+low)/2;
-    ref.pg =
     pg = get_page(s->name, mid);
 
-    ref.low =
-    pos = page_seek(pg, P_BEG, 0);
-    rec_val = page_get_int_at(pg, pos + offset);
-
-    if (val < rec_val) {
-      high = page_block_nr(pg);
-      continue;
-    }
-    if (val == rec_val) { // match at bottom of page
+    switch (val_in_page_range(s, pg, offset, val))
+    {
+    case FIRST:
+    
       cpg = get_page(s->name, mid-1);
-      cpos = page_seek(cpg, P_END, -s->len);
-      if (val != page_get_int_at(cpg, cpos+offset))
-        goto found;
-      else {
+
+      switch (val_in_page_range(s, cpg, offset, val))
+      {
+      case FIRST:
+
         high = mid;
-        continue;
+
+      break;
+      case LAST:
+
+        unpin(pg);
+        pg = cpg;
+        goto last;
+
+      break;
+      case WITHIN:
+
+        unpin(pg);
+        pg = cpg;
+        pos = bfind_page_first_int_val(s, pg, offset, val);
+        if (pos < 0)
+          goto not;
+        else
+          goto found;
+
+      break;
+      case ABOVE:
+
+        unpin(cpg);
+        goto first;
+
+      break;
+      case BELOW:
+
+      // this point should never be reached
+      put_msg(ERROR, "Field %s is not properly sorted, found %d before %d\n",
+                      field_name,
+                      page_get_int_at(cpg, page_seek(cpg, P_BEG, offset)),
+                      page_get_int_at(cpg, page_seek(pg, P_BEG, offset))
+              );
+      put_msg(ERROR, "Checking blocks:");
+      put_page_info(ERROR, cpg);
+      put_page_info(ERROR, pg);
+      put_schema_info(ERROR, s);
+      exit(EXIT_FAILURE);
+      break;
       }
-    }
+    
+    break;
+    case LAST:
 
-    ref.high =
-    pos = page_seek(pg, P_END, -s->len);
-    rec_val = page_get_int_at(pg, pos + offset);
+      goto last;
 
-    if (val > rec_val) {
-      if (low == page_block_nr(pg))
+    break;
+    case WITHIN:
+
+      pos = bfind_page_first_int_val(s, pg, offset, val);
+      if (pos < 0)
         goto not;
-      low = page_block_nr(pg);
-      continue;
+      else
+        goto found;
+
+    case ABOVE:
+
+      if (low == mid)
+        goto not;
+      low = mid;
+
+    break;
+    case BELOW:
+
+      high = mid;
+
+    break;
     }
-
-    pos = bfind_page_first_int_val(s, ref, offset, val);
-    if (pos < 0)
-      goto not;
-    goto found;
-
   }
+
+found:
+
+  page_set_current_pos(pg, pos);
+
+goto success;
+first:
+
+  page_seek(pg, P_BEG, 0);
+
+goto success;
+last:
+
+  page_seek(pg, P_END, -s->len);
+
+goto success;
+success:
+
+  s->tbl->current_pg = pg;
+  return 1;
 
 not:
 
   return 0;
-
-found:
-
-  s->tbl->current_pg = pg;
-  page_set_current_pos(pg, pos);
-  return 1;
 
 }
 
@@ -1188,30 +1352,69 @@ void table_display(tbl_p t) {
   release_record(rec, s);
 }
 
+static int *interpret_op (const char * const op)
+{
+  switch (op[0])
+  {
+  case '=':
+
+    if (op[1] == '\0')
+      return int_eq;
+
+  break;
+  case '!':
+  
+    if (op[1] == '=')
+      if (!op[2])
+        return int_neq;
+
+  break;
+  case '<':
+
+    switch (op[1])
+    {
+    case '\0':
+    
+      return int_l;
+    
+    case '=':
+    
+      if (!op[2])
+        return int_le;
+    
+    }
+    
+  break;
+  case '>':
+
+    switch (op[1])
+    {
+    case '\0':
+    
+      return int_g;
+    
+    break;
+    case '=':
+    
+      if (!op[2])
+        return int_ge;
+    
+    break;
+    }
+  
+  break;
+  }
+
+  return NULL;
+}
+
 /* We restrict ourselves to equality search on an int attribute */
 tbl_p table_search(tbl_p t, char const* attr, char const* op, int val, int b_search) {
   if (!t) return 0;
 
   int (*cmp_op)() = 0;
 
-  if (strcmp(op, "=") == 0)
-    cmp_op = int_eq;
-
-  else if (strcmp(op, "!=") == 0)
-    cmp_op = int_neq;
-
-  else if (strcmp(op, "<") == 0)
-    cmp_op = int_l;
-
-  else if (strcmp(op, "<=") == 0)
-    cmp_op = int_le;
-
-  else if (strcmp(op, ">") == 0)
-    cmp_op = int_g;
-
-  else if (strcmp(op, ">=") == 0)
-    cmp_op = int_ge;
-
+  cmp_op = interpret_op(op);
 
   if (!cmp_op) {
     put_msg(ERROR, "unknown comparison operator \"%s\".\n", op);
@@ -1238,7 +1441,6 @@ tbl_p table_search(tbl_p t, char const* attr, char const* op, int val, int b_sea
 
   record rec = new_record(s);
 
-  //TODO: replace this too
   set_tbl_position(t, TBL_BEG);
   if (b_search && cmp_op == int_eq){
     if (bfind_first_int_val(s, f->offset, val))
