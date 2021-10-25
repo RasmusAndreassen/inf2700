@@ -15,3 +15,8 @@ assignments-2-3/db2700/tests
 db2700/__pycache__
 assignments-2-3/docs/specification-assignment2.pdf
 *.tex
+assignments-2-3/db2700/__pycache__/cfg.cpython-310.pyc
+assignments-2-3/db2700/res
+assignments-2-3/docs/BSalg.png
+assignments-2-3/docs/PBSalg.png
+assignments-2-3/docs/Pchk.png
