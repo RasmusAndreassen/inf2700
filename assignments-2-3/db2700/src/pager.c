@@ -534,7 +534,7 @@ static fhandle_p get_tbl_file(char const* fname) {
 static fhandle_p open_tbl_file(char const* fname) {
   if (num_file_handles == MAX_OPEN_FILES) {
     put_msg(WARN,
-            "open Cannot file %s because the limit %d of open files has reached.",
+            "Cannot open file %s because the limit %d of open files has reached.\n",
             fname, MAX_OPEN_FILES);
     return 0;
   }

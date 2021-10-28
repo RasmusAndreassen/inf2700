@@ -12,30 +12,39 @@ pmsg_level msglevel = INFO;
 
 void put_msg(pmsg_level level, char const* format, ...) {
   va_list args;
+  FILE *stream;
 
   if (level > msglevel) return;
+  if (level == FORCE)
+    stream = stdout;
+  else
+    stream = level <= WARN ? stderr: stdout;
 
   va_start(args, format);
   switch (level) {
-  case FATAL: fprintf(stderr, "FATAL: "); break;
-  case ERROR: fprintf(stderr, "ERROR: "); break;
-  case WARN:  fprintf(stderr, "WARN:  "); break;
-  case INFO:  fprintf(stderr, "INFO:  "); break;
-  case DEBUG: fprintf(stderr, "DEBUG: "); break;
+  case FATAL: fprintf(stream, "FATAL: "); break;
+  case ERROR: fprintf(stream, "ERROR: "); break;
+  case WARN:  fprintf(stream, "WARN:  "); break;
+  case INFO:  fprintf(stream, "INFO:  "); break;
+  case DEBUG: fprintf(stream, "DEBUG: "); break;
   case FORCE: break;
   }
 
-  vfprintf(stderr, format, args);
+  vfprintf(stream, format, args);
   va_end(args);
 }
 
 
 void append_msg(pmsg_level level, char const* format, ...) {
   va_list args;
+  FILE *stream;
 
   if (level>msglevel) return;
-
+  if (level == FORCE)
+    stream = stdout;
+  else
+    stream = level <= WARN ? stderr: stdout;
   va_start(args, format);
-  vfprintf(stderr, format, args);
+  vfprintf(stream, format, args);
   va_end(args);
 }

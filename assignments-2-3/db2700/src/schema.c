@@ -434,7 +434,7 @@ static schema_p copy_schema(schema_p s, char const* dest_name) {
   return dest;
 }
 
-/** @b copy_schema
+/** @b get_field
  * 
  * returns the named field of schema
  * 
@@ -1352,7 +1352,7 @@ void table_display(tbl_p t) {
   release_record(rec, s);
 }
 
-static int *interpret_op (const char * const op)
+static void *interpret_op (const char * const op)
 {
   switch (op[0])
   {
@@ -1412,7 +1412,7 @@ static int *interpret_op (const char * const op)
 tbl_p table_search(tbl_p t, char const* attr, char const* op, int val, int b_search) {
   if (!t) return 0;
 
-  int (*cmp_op)() = 0;
+  int (*cmp_op)() = NULL;
 
   cmp_op = interpret_op(op);
 
@@ -1479,29 +1479,249 @@ tbl_p table_project(tbl_p t, int num_fields, char* fields[]) {
   return dest->tbl;
 }
 
-tbl_p table_natural_join(tbl_p left, tbl_p right) {
+char *join_schemas(schema_p *dest, tbl_p left, tbl_p right)
+{
+  char *joined_name, *new_name, *shared;
+
+  joined_name = concat_names(left->sch->name, "_and_", right->sch->name);
+  if (!joined_name) {
+    goto MemErr;
+  }
+
+  new_name = tmp_schema_name("join", joined_name);
+
+  free(joined_name);
+  if (!new_name) {
+    goto MemErr;
+  }
+
+  *dest = copy_schema(left->sch, new_name);
+
+  free(new_name);
+  if (!(*dest)) {
+    goto MemErr;
+  }
+
+  shared = NULL;
+  for (field_desc_p
+    rfield = right->sch->first;
+    rfield;
+    rfield = field_desc_next(rfield)
+    ) {
+
+    if (!shared) { // shared field not found yet
+      for (field_desc_p 
+        lfield = left->sch->first;
+        lfield;
+        lfield = field_desc_next(lfield)
+        ) {
+        if (strcmp(lfield->name, rfield->name) == 0) {
+          shared = rfield->name;
+          break;
+        }
+      }
+      if (shared) // at this point we don't want to add the field, since there can be no duplicate names
+        continue;
+    }
+    add_field(*dest, dup_field(rfield));
+  }
+
+  if (!shared) {
+    put_msg(ERROR, "No common attribute found");
+    release_schema(*dest);
+  }
+
+  return shared;
+
+MemErr:
+  put_msg(FATAL, "No more memory in join_schemas");
+  exit(EXIT_FAILURE);
+
+}
+
+typedef struct find_and_merge_mem {
+  int first_time;
+  record l_record;
+  int l_offset;
+  int l_val;
+  record r_record;
+  int r_offset;
+} fm_mem_t;
+
+
+typedef struct merging_schemas {
+  schema_p left;
+  schema_p right;
+  schema_p dest;
+} msch_t;
+
+typedef struct find_and_merge_args {
+  msch_t schemas;
+  const char *const fldname;
+  fm_mem_t *memory;
+} fm_args_t;
+
+void *memdup (const void *const __src, size_t __n)
+{
+  void *out = malloc(__n);
+  if (!out) return out;
+  return memcpy(out, __src, __n);
+}
+
+static void *get_record_val (record r, int o, schema_p s)
+{
+  int i;
+  field_desc_p f;
+  for (
+    i = 0, f = s->first;
+    f && f->offset < o;
+    i++, f = field_desc_next(f)
+  );
+  return r[i];
+}
+
+static record merge (record lrecord, record rrecord, int r_offset, msch_t schemas)
+{
+  if (!(lrecord && rrecord)) {
+    put_msg(ERROR, "no records found!\n");
+    return NULL;
+  }
+
+  void *p;
+  int i=0, j=0, op=0;
+  field_desc_p lf, rf;
+  record drecord;
+
+  drecord = calloc(schemas.left->num_fields + schemas.right->num_fields-1, sizeof(void *));
+  if (!drecord) {
+    goto MemErr;
+  }
+
+  for (
+      i = 0,
+      lf = schemas.left->first;
+      i < schemas.left->num_fields;
+      i++,
+      lf = field_desc_next(lf)
+    ) {
+    p = memdup(lrecord[i], lf->len);
+    if (!p) goto MemErr;
+
+    drecord[i] = p;
+  }
+  for (
+      j = 0,
+      rf = schemas.right->first;
+      j < schemas.right->num_fields-1;
+      j++,
+      rf = field_desc_next(rf)
+    ) {
+    if (rf->offset == r_offset) {
+      rf = field_desc_next(rf);
+      op = 1;
+    }
+
+    p = memdup(rrecord[j+op], rf->len);
+    if (!p) goto MemErr;
+
+    drecord[i+j] = p;
+  }
+
+  return drecord;
+
+MemErr:
+  if (drecord) {
+    for (int __q = 0; __q < i + j; __q++) {
+      if (drecord[__q])
+        free(drecord[__q]);
+      else
+        break;  
+      }
+    free(drecord);
+  }
+
+  put_msg(FATAL, "merge: No more memory!\n");
+  exit(EXIT_FAILURE);
+
+}
+
+void fm_setup (fm_args_t args)
+{
+  field_desc_p f;
+  f = get_field(args.schemas.left, args.fldname);
+
+  *args.memory = (fm_mem_t){
+  .first_time = -1,
+
+  .l_offset = f->offset,
+  .l_record = new_record(args.schemas.left),
+
+  .r_offset = f->offset,
+  .r_record = new_record(args.schemas.right)
+  };
+
+  if (!get_record(args.memory->l_record, args.schemas.left))
+    return;
+  args.memory->l_val = *(int*)get_record_val(args.memory->l_record, args.memory->l_offset, args.schemas.left);
+}
+
+record find_and_merge (fm_args_t args)
+{ 
+  record drecord;
+
+  if (args.memory->first_time == 0)
+    fm_setup(args);
+
+  while (1){
+    if (find_record_int_val(args.memory->r_record, args.schemas.right, args.memory->r_offset, int_eq, args.memory->l_val)) {
+      drecord = merge(args.memory->l_record, args.memory->r_record, args.memory->r_offset, args.schemas);
+      break;
+    } else if (get_record(args.memory->l_record, args.schemas.left)) {
+        args.memory->l_val = *(int*)get_record_val(args.memory->l_record, args.memory->l_offset, args.schemas.left);
+        set_tbl_position(args.schemas.right->tbl, TBL_BEG);
+    } else {
+      release_record(args.memory->r_record, args.schemas.right);
+      release_record(args.memory->l_record, args.schemas.left);
+      return NULL;
+    }
+  }
+
+  return drecord;
+}
+
+tbl_p table_natural_join (tbl_p left, tbl_p right) {
   if (!(left && right)) {
     put_msg(ERROR, "no table found!\n");
     return 0;
   }
 
   tbl_p res = NULL;
-  
-  // char *joined_name = concat_names(left->sch->name, "__join__", right->sch->name);
-  // schema_p sch = copy_schema(left->sch, joined_name);
-  // free(joined_name);
+  schema_p NJ_sch;
+  record c_product;
+  char *const key = join_schemas(&NJ_sch, left, right);
+  if (!key)
+    return NULL;
 
-  // for (field_desc_p 
-  //       fl = left->sch->first;
-  //       fl && fr;
-  //     {
+  fm_mem_t memory = {};
 
-  //       fr = right->sch->first;
-    
-    
-  // }
-  
-  // res = sch->tbl;
+  fm_args_t args = {
+    .schemas = {
+      .dest = NJ_sch,
+      .left = left->sch,
+      .right = right->sch
+    },
+    .fldname = key,
+    .memory = &memory
+  };
+
+  set_tbl_position(left, TBL_BEG);
+  set_tbl_position(right, TBL_BEG);
+
+  while (NULL != (c_product = find_and_merge(args))){
+    append_record(c_product, NJ_sch);
+    release_record(c_product, NJ_sch);
+  }
+  res = NJ_sch->tbl;
 
   return res;
 }

@@ -3,7 +3,7 @@
 #include "test_data_gen.h"
 #include "pmsg.h"
 
-#define NUM_RECORDS 1000
+#define NUM_RECORDS 24
 
 /* The records generated in test_tbl_write().
    Will be used in test_tbl_read() to check for correctness. */
@@ -87,12 +87,16 @@ void test_tbl_natural_join(char const* my_tbl, char const* yr_tbl) {
   tbl_p tbl_m = get_table(my_tbl);
   tbl_p tbl_y = get_table(yr_tbl);
 
+  table_display(tbl_m);
+  table_display(tbl_y);
+
   tbl_p tbl_o = table_natural_join(tbl_m, tbl_y);
 
   table_display(tbl_o);
 
 
   put_db_info(DEBUG);
+  remove_table(tbl_o);
   close_db();
   //put_pager_info(INFO, "After close_db");
 
